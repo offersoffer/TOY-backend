@@ -15,9 +15,10 @@ process cannot inherit a developer's database or their test payment keys.
 ## Deployment shape
 
 One origin, `https://offersoffer.in`. Nginx serves the Angular build and
-forwards `/api` and `/uploads` to this process — the same arrangement
-`proxy.conf.json` creates in development, so production is not a different
-shape from the one the app is developed against.
+forwards `/api` to this process — the same arrangement `proxy.conf.json`
+creates in development, so production is not a different shape from the one
+the app is developed against. Images are the exception: they are stored in S3
+and served by CloudFront from their own address (`STORAGE_PUBLIC_URL`, §8).
 
 That choice is why several values below are what they are: the web app needs no
 absolute API URL, the refresh cookie is `SameSite=lax` rather than a cross-site
@@ -143,9 +144,25 @@ Point the production Razorpay webhook at the production API only.
 
 | Variable | Status | Default | Notes |
 |---|---|---|---|
-| `STORAGE_DRIVER` | Optional | `local` | Only `local` is implemented; anything else throws 501. |
-| `UPLOAD_DIR` | **Required** | `uploads` | An absolute path on persistent storage, separate from staging uploads. The default is inside the repo and is lost on redeploy. |
+Production stores images in S3 and serves them through CloudFront, so no image
+lives on an API server's disk. Startup is refused unless all four rules hold:
+the driver is `s3`, the bucket is set, its name does not look like a
+development or staging bucket (§19), and the public URL is `https://`.
+
+| Variable | Status | Default | Notes |
+|---|---|---|---|
+| `STORAGE_DRIVER` | **Required** | `local` | Must be `s3` in production. `local` is for development. |
+| `S3_BUCKET` | **Required** | — | A bucket used by production only. Keep Block Public Access on; CloudFront reads it through Origin Access Control. |
+| `S3_REGION` | Optional | `ap-south-1` | Falls back to `AWS_REGION`. |
+| `STORAGE_PUBLIC_URL` | **Required** | — | The CDN address, e.g. `https://media.offersoffer.in`. Stored image URLs are built from it, so set it before the first upload and never change it afterwards. |
+| `S3_ENDPOINT` | Optional | — | Only for an S3-compatible store (MinIO). Leave empty for AWS. |
 | `MAX_UPLOAD_MB` | Optional | `5` | |
+| `UPLOAD_DIR` | Not used | `uploads` | Local driver only. |
+
+There are no AWS key variables. The SDK takes credentials from the EC2
+instance's IAM role, which needs `s3:PutObject` and `s3:DeleteObject` on the
+bucket. Delete is used by Platform Health's write probe (under `.health/`) and
+to clean up an image whose thumbnail failed to upload.
 
 ## 9. Push notifications
 
@@ -214,7 +231,7 @@ Point the production Razorpay webhook at the production API only.
 
 ## The minimum that must be set
 
-Everything else has a workable default. These 24 do not:
+Everything else has a workable default. These 26 do not:
 
 ```
 NODE_ENV  DB_HOST  DB_NAME  PRODUCTION_DB_NAME  DB_USER  DB_PASSWORD
@@ -224,15 +241,15 @@ SEED_DEMO_DATA  SEED_SUPERADMIN_EMAIL  SEED_SUPERADMIN_PASSWORD
 RAZORPAY_KEY_ID  RAZORPAY_KEY_SECRET  RAZORPAY_WEBHOOK_SECRET
 RAZORPAY_PLAN_BUSINESS  RAZORPAY_PLAN_PREMIUM
 SMTP_HOST  SMTP_USER  SMTP_PASSWORD
-UPLOAD_DIR
+STORAGE_DRIVER  S3_BUCKET  STORAGE_PUBLIC_URL
 AI_SERVICE_URL          (if AI_SERVICE_ENABLED is true)
 ```
 
-Six of these are enforced at startup — `NODE_ENV`, `PRODUCTION_DB_NAME`,
-`DB_USER`, `DB_PASSWORD`, `SEED_DEMO_DATA` and the two JWT secrets. The rest
-fail later and more quietly: a wrong `APP_URL` sends every password-reset link
-to localhost, an empty `SMTP_HOST` writes mail to a directory instead of
-sending it, and a default `UPLOAD_DIR` loses every uploaded image on redeploy.
+These are enforced at startup: `NODE_ENV`, `PRODUCTION_DB_NAME`, `DB_USER`,
+`DB_PASSWORD`, `SEED_DEMO_DATA`, the two JWT secrets, and the three storage
+settings. The rest fail later and more quietly: a wrong `APP_URL` sends every
+password-reset link to localhost, and an empty `SMTP_HOST` writes mail to a
+directory instead of sending it.
 
 See `docs/production-database.md` for the go-live runbook and
 `.env.production.example` for a fill-in-the-blanks template.

@@ -103,6 +103,45 @@ function check(env) {
     );
   }
 
+  problems.push(...storageProblems(env.storage));
+
+  return problems;
+}
+
+/**
+ * §19: production images live in shared object storage, never on the disk of
+ * one server - a disk dies with its server, and a second server cannot see it.
+ */
+function storageProblems(storage) {
+  if (!storage) return [];
+  if (storage.driver !== 's3') {
+    return [
+      `STORAGE_DRIVER is "${storage.driver}". Production must store images in S3 ` +
+        '(STORAGE_DRIVER=s3), not on the local disk of one server (§19).',
+    ];
+  }
+
+  const problems = [];
+  const { bucket, publicUrl } = storage.s3 ?? {};
+  if (!bucket) {
+    problems.push('S3_BUCKET is not set. Production needs a bucket to store images in.');
+  } else if (NON_PRODUCTION_NAME.test(bucket)) {
+    problems.push(
+      `S3 bucket "${bucket}" looks like a development, staging or test bucket. ` +
+        'Production uploads must not share storage with any other environment (§19).',
+    );
+  }
+  if (!publicUrl) {
+    problems.push(
+      'STORAGE_PUBLIC_URL is not set. It is the CDN address images are served from, and ' +
+        'every stored image URL is built from it.',
+    );
+  } else if (!/^https:\/\/[^/]+/.test(publicUrl) || /localhost|127\.0\.0\.1/.test(publicUrl)) {
+    problems.push(
+      `STORAGE_PUBLIC_URL "${publicUrl}" must be a public https:// address. Image URLs ` +
+        'are saved with it, so a wrong value is written into every record.',
+    );
+  }
   return problems;
 }
 
@@ -120,7 +159,7 @@ function assertProductionConfig(env) {
   if (!problems.length) return;
 
   throw new Error(
-    ['', 'APPLICATION STARTUP FAILED', '', 'Production database configuration is invalid:', '']
+    ['', 'APPLICATION STARTUP FAILED', '', 'Production configuration is invalid:', '']
       .concat(problems.map((problem) => `  - ${problem}`))
       .concat(['', 'Refusing to start (Database §14, §15).', ''])
       .join('\n'),

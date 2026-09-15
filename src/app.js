@@ -88,11 +88,15 @@ app.use(csrfGuard);
 // queryable fields, and a formatted line is none of those.
 if (env.nodeEnv !== 'test') app.use(httpLogger);
 
-// Processed images. `immutable` is safe because filenames are content-unique.
-app.use(
-  '/uploads',
-  express.static(env.storage.uploadDir, { maxAge: '30d', immutable: true, fallthrough: true }),
-);
+// Processed images, for the local driver only. With S3 they are served by the
+// CDN and never pass through this process. `immutable` is safe because
+// filenames are unique per upload.
+if (env.storage.driver === 'local') {
+  app.use(
+    '/uploads',
+    express.static(env.storage.uploadDir, { maxAge: '30d', immutable: true, fallthrough: true }),
+  );
+}
 
 /**
  * Liveness probe for load balancers and uptime monitors.

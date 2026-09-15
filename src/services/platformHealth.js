@@ -1,12 +1,11 @@
 'use strict';
 
-const crypto = require('node:crypto');
-const fs = require('node:fs/promises');
 const { healthCheck, rawQuery } = require('../db/pool');
 const env = require('../config/env');
 const mailer = require('../utils/mailer');
 const razorpay = require('./razorpay');
 const push = require('./push');
+const storage = require('./storage');
 const failureLog = require('./failureLog');
 const { ALERT_RULES } = require('../config/businessMetrics');
 
@@ -279,39 +278,16 @@ async function probeNotifications() {
 }
 
 /**
- * Image storage. The local driver has a filesystem to check, which is worth
- * doing properly: a full or read-only disk is the failure this catches, and it
- * is invisible until the next merchant tries to upload a shop photo.
+ * Image storage, probed with a real write and delete (storage.probe): a full
+ * disk, a revoked IAM permission or a deleted bucket is the failure this
+ * catches, and each is invisible until the next merchant uploads a shop photo.
  */
 async function probeImageUpload() {
-  if (env.storage.driver !== 'local') {
-    return component(
-      'imageUpload',
-      'Image Upload',
-      STATUS.NOT_CONFIGURED,
-      `Storage driver "${env.storage.driver}" has no health probe.`,
-    );
-  }
-
-  const probe = (async () => {
-    await fs.mkdir(env.storage.uploadDir, { recursive: true });
-    // A real write, because a readable directory on a full disk still fails.
-    //
-    // The filename is unique per probe. A fixed one looks harmless until two
-    // probes overlap - the dashboard polls every 30 seconds and an
-    // administrator can hit Re-check on top of that - and then one unlinks the
-    // file the other is about to unlink, the second `unlink` throws ENOENT, and
-    // a perfectly healthy disk is reported as "not writable" at random.
-    const path = `${env.storage.uploadDir}/.health-probe-${process.pid}-${crypto.randomUUID()}`;
-    await fs.writeFile(path, 'ok');
-    await fs.unlink(path);
-    return true;
-  })();
-
-  const ok = await withTimeout(probe.catch(() => false), 3000, false);
+  const where = storage.describe();
+  const ok = await withTimeout(storage.probe().catch(() => false), 3000, false);
   return ok
-    ? component('imageUpload', 'Image Upload', STATUS.HEALTHY, 'Upload directory is writable.')
-    : component('imageUpload', 'Image Upload', STATUS.DOWN, 'Upload directory is not writable.');
+    ? component('imageUpload', 'Image Upload', STATUS.HEALTHY, `${where} is writable.`)
+    : component('imageUpload', 'Image Upload', STATUS.DOWN, `${where} is not writable.`);
 }
 
 /** Geocoding - what "Location Services" means on the server side. */

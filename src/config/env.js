@@ -165,10 +165,26 @@ const env = {
       .filter(Boolean),
   },
 
+  /**
+   * Where processed images go (services/storage.js). `local` is for
+   * development; production must use `s3` (config/productionGuard.js).
+   *
+   * No AWS keys here on purpose: on EC2 the SDK takes short-lived credentials
+   * from the server's IAM role. Locally it reads `~/.aws` or AWS_PROFILE.
+   */
   storage: {
-    driver: process.env.STORAGE_DRIVER || 'local',
+    driver: (process.env.STORAGE_DRIVER || 'local').trim().toLowerCase(),
     uploadDir: path.resolve(__dirname, '../../', process.env.UPLOAD_DIR || 'uploads'),
     maxUploadBytes: int(process.env.MAX_UPLOAD_MB, 5) * 1024 * 1024,
+    s3: {
+      bucket: (process.env.S3_BUCKET || '').trim(),
+      region: process.env.S3_REGION || process.env.AWS_REGION || 'ap-south-1',
+      // The CDN in front of the bucket (CloudFront), e.g. https://media.offersoffer.in.
+      // Stored URLs are built from it, so it has to be right before the first upload.
+      publicUrl: (process.env.STORAGE_PUBLIC_URL || '').trim().replace(/\/$/, ''),
+      // Only for an S3-compatible store such as MinIO; leave empty for AWS.
+      endpoint: (process.env.S3_ENDPOINT || '').trim(),
+    },
   },
 
   /** Discovery tuning (§16, §18). Configurable rather than hardcoded. */

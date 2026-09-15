@@ -271,9 +271,10 @@ listings are never reordered by plan.
 
 Uploads are buffered in memory, re-encoded through `sharp` (which also
 neutralises files that merely claim an image MIME type), resized, converted to
-WebP and given a thumbnail. Only URLs are stored in MySQL. Swapping local disk
-for S3/CDN means implementing `put()` in `services/storage.js`; nothing else
-changes.
+WebP and given a thumbnail. Only URLs are stored in MySQL. Development writes to
+local disk (`STORAGE_DRIVER=local`); production writes to S3 and serves images
+through CloudFront (`STORAGE_DRIVER=s3`), so no image lives on any one server.
+Both drivers use the same `uploads/<folder>/<file>` layout.
 
 ---
 
@@ -512,7 +513,7 @@ See `.env.example`. Notable values:
 | `CORS_ORIGINS` | Comma-separated browser origins allowed to call the API |
 | `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | Must be changed outside development — the app refuses to boot in production with the defaults |
 | `SMTP_HOST` | Leave empty to log emails to the console instead of sending |
-| `STORAGE_DRIVER` | `local` (implemented) or `s3` (stub) |
+| `STORAGE_DRIVER` | `local` (development) or `s3` (required in production, with `S3_BUCKET` and `STORAGE_PUBLIC_URL`) |
 | `MAX_UPLOAD_MB` | Per-image upload cap |
 | `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` | Leave empty and checkout answers `503 PAYMENTS_NOT_CONFIGURED` instead of failing mid-call |
 | `RAZORPAY_WEBHOOK_SECRET` | Required for `POST /payments/razorpay/webhook`; without it the endpoint refuses rather than trusting unverified events |
