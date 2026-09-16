@@ -149,7 +149,21 @@ async function create(payload, user) {
 
 /** Tells the support desk a ticket has arrived, if there is an inbox to tell. */
 async function announceToDesk(ticket) {
-  if (!env.support.inbox) return;
+  // Returning quietly here is how a ticket could be filed, acknowledged with a
+  // reference, and never reach anybody - the customer is told "received", which
+  // is true, while the desk hears nothing. Say so in the log at least.
+  if (!env.support.inbox) {
+    logger.warn(
+      {
+        event: 'SUPPORT_INBOX_NOT_CONFIGURED',
+        dependency: 'EMAIL',
+        category: 'NOTIFICATION',
+        ticket_reference: ticket.reference,
+      },
+      'No SUPPORT_INBOX or SUPPORT_EMAIL is set - the ticket was saved but nobody was told',
+    );
+    return;
+  }
   const lines = [
     `${ticket.reference} - ${ticket.subject}`,
     '',

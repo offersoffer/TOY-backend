@@ -45,6 +45,15 @@ const list = (value, fallback = []) =>
 
 const isProduction = NODE_ENV === 'production';
 
+/** The bare address out of a `Name <addr@host>` header, or '' if there is none. */
+function addressIn(value) {
+  const match = /<([^>]+)>/.exec(value || '');
+  return (match ? match[1] : value || '').trim();
+}
+
+/** Published on the Support and Privacy pages, and the support inbox default. */
+const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || 'offersoffersupport@gmail.com';
+
 const DEFAULT_SEED_EMAIL = 'superadmin@offers.app';
 const DEFAULT_SEED_PASSWORD = 'SuperAdmin@123';
 
@@ -152,13 +161,17 @@ const env = {
    *
    * Configurable rather than hardcoded because these are the contact details of
    * a business, not a property of the software - they change when a support
-   * desk moves, and a redeploy should not be what it takes. `inbox` is where a
-   * new ticket is announced; it defaults to the MAIL_FROM address so a server
-   * with SMTP configured and nothing else set still delivers somewhere real.
+   * desk moves, and a redeploy should not be what it takes.
+   *
+   * `inbox` is where a new ticket is announced. It falls back to SUPPORT_EMAIL
+   * and then to the address inside MAIL_FROM, so a server with SMTP configured
+   * and nothing else set still delivers somewhere real - which is what this
+   * comment already promised while the code fell back to an empty string, and
+   * an empty inbox makes support.service drop the announcement on the floor.
    */
   support: {
-    inbox: process.env.SUPPORT_INBOX || process.env.SUPPORT_EMAIL || '',
-    email: process.env.SUPPORT_EMAIL || 'offersoffersupport@gmail.com',
+    inbox: process.env.SUPPORT_INBOX || SUPPORT_EMAIL || addressIn(process.env.MAIL_FROM),
+    email: SUPPORT_EMAIL,
     phones: (process.env.SUPPORT_PHONES || '+91 7540043503,+91 7904795700')
       .split(',')
       .map((value) => value.trim())
