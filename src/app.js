@@ -121,6 +121,16 @@ app.get('/health', async (_req, res) => {
   });
 });
 
+/**
+ * `/sitemap.xml`, at the site root rather than under the API prefix.
+ *
+ * Crawlers only look at the root, and robots.txt can only point there, so this
+ * one path is proxied to this process by nginx while the rest of the root is
+ * the Angular build. Mounted ahead of the API router because it is not an API
+ * endpoint: no prefix, no rate limiter, no guest/authenticated cache split.
+ */
+app.use(require('./modules/sitemap/sitemap.routes'));
+
 // Guest/authenticated cache separation (§26). Sits ahead of the router so it
 // applies to every API response, including error responses.
 app.use(env.apiPrefix, apiLimiter, cachePolicy, routes);
