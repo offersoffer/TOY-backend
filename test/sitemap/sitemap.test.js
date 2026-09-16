@@ -16,7 +16,7 @@ const path = require('node:path');
 const poolPath = require.resolve('../../src/db/pool');
 
 let lastQueries = [];
-let rows = { shops: [], offers: [], services: [] };
+let rows = { categories: [], categoryCities: [], shops: [], offers: [], services: [] };
 
 require.cache[poolPath] = {
   id: poolPath,
@@ -25,7 +25,11 @@ require.cache[poolPath] = {
   exports: {
     query: async (sql) => {
       lastQueries.push(sql.replace(/\s+/g, ' ').trim());
+      if (/FROM categories/.test(sql)) return rows.categories;
       if (/FROM shops/.test(sql)) return rows.shops;
+      // Checked before the plain offers query: the category/city crossing reads
+      // FROM offers as well, and is told apart by its GROUP BY.
+      if (/GROUP BY c\.slug, b\.city/.test(sql)) return rows.categoryCities;
       if (/FROM offers/.test(sql)) return rows.offers;
       if (/FROM services/.test(sql)) return rows.services;
       throw new Error(`unexpected query: ${sql}`);
@@ -38,7 +42,7 @@ const sitemap = require('../../src/modules/sitemap/sitemap.service');
 
 function reset(next = {}) {
   lastQueries = [];
-  rows = { shops: [], offers: [], services: [], ...next };
+  rows = { categories: [], categoryCities: [], shops: [], offers: [], services: [], ...next };
   sitemap.invalidate();
 }
 
@@ -66,6 +70,119 @@ test('shops are emitted by slug, which is what the canonical tag uses', async ()
 
   assert.match(xml, new RegExp(`<loc>${env.appUrl}/shops/raju-textiles</loc>`));
   assert.match(xml, /<lastmod>2026-09-01T10:00:00\.000Z<\/lastmod>/);
+});
+
+test('category listings are emitted at their own route, not the query form', async () => {
+  reset({ categories: [{ slug: 'clothing', updated_at: new Date('2026-09-02T10:00:00Z') }] });
+  const xml = await sitemap.getSitemap();
+
+  assert.match(xml, new RegExp(`<loc>${env.appUrl}/offers/c/clothing</loc>`));
+  assert.match(xml, /<lastmod>2026-09-02T10:00:00\.000Z<\/lastmod>/);
+  // The query form canonicalises into the route above, so listing it too would
+  // advertise a second address for one page - the thing this used to get wrong.
+  assert.doesNotMatch(xml, /categoryId=/);
+  assert.doesNotMatch(xml, /\/offers\?/);
+});
+
+test('only active top-level categories are asked for', async () => {
+  reset();
+  await sitemap.getSitemap();
+
+  const categories = lastQueries.find((sql) => /FROM categories/.test(sql));
+  assert.ok(categories, 'the category listings should be queried for');
+  assert.match(categories, /c\.status = 'active'/);
+  // A subcategory listing competes with its parent for the same query.
+  assert.match(categories, /c\.parent_id IS NULL/);
+});
+
+test('a category listing survives truncation, because the long tail is the point', async () => {
+  reset({
+    categories: [{ slug: 'clothing', updated_at: null }],
+    offers: Array.from({ length: sitemap.MAX_URLS + 500 }, (_, i) => ({ id: i + 1, updated_at: null })),
+  });
+  const xml = await sitemap.getSitemap();
+
+  assert.match(xml, new RegExp(`<loc>${env.appUrl}/offers/c/clothing</loc>`));
+  assert.equal((xml.match(/<loc>/g) ?? []).length, sitemap.MAX_URLS);
+});
+
+test('a category slug is escaped in the path like any other', async () => {
+  reset({ categories: [{ slug: 'toys&games', updated_at: null }] });
+  const xml = await sitemap.getSitemap();
+
+  assert.match(xml, new RegExp(`<loc>${env.appUrl}/offers/c/toys%26games</loc>`));
+  assert.doesNotMatch(xml, /<loc>[^<]*&(?!amp;|quot;|apos;|lt;|gt;)/);
+});
+
+test('a category is crossed with a city only where live offers back it', async () => {
+  reset({
+    categories: [{ slug: 'clothing', updated_at: null }],
+    categoryCities: [
+      { slug: 'clothing', city: 'Coimbatore', updated_at: new Date('2026-09-03T10:00:00Z'), offer_count: 4 },
+    ],
+  });
+  const xml = await sitemap.getSitemap();
+
+  assert.match(xml, new RegExp(`<loc>${env.appUrl}/offers/c/clothing/coimbatore</loc>`));
+  assert.match(xml, /<lastmod>2026-09-03T10:00:00\.000Z<\/lastmod>/);
+  // The category at large is still its own page, and the stronger of the two.
+  assert.match(xml, new RegExp(`<loc>${env.appUrl}/offers/c/clothing</loc>`));
+});
+
+test('a category with no offers in a city is not crossed with it', async () => {
+  reset({ categories: [{ slug: 'clothing', updated_at: null }] });
+  const xml = await sitemap.getSitemap();
+
+  assert.match(xml, new RegExp(`<loc>${env.appUrl}/offers/c/clothing</loc>`));
+  // Listing every crossing would be listing empty pages, which is worse than
+  // not listing them: the query returns the pairs that have something on them.
+  assert.doesNotMatch(xml, /\/offers\/c\/clothing\/\w/);
+});
+
+test('the crossing asks only for live offers that apply at a branch in the city', async () => {
+  reset();
+  await sitemap.getSitemap();
+
+  const crossing = lastQueries.find((sql) => /GROUP BY c\.slug, b\.city/.test(sql));
+  assert.ok(crossing, 'the category/city crossing should be queried for');
+
+  // The same live predicate the listing itself runs.
+  assert.match(crossing, /o\.status = 'active'/);
+  assert.match(crossing, /s\.status = 'active'/);
+  assert.match(crossing, /o\.start_date <= NOW\(\)/);
+  assert.match(crossing, /o\.end_date >= NOW\(\)/);
+  assert.match(crossing, /c\.parent_id IS NULL/);
+
+  // An offer only counts for a city if it actually applies at a branch there -
+  // shop-wide, or on the branch list. An online-only offer applies at neither.
+  assert.match(crossing, /applicability_type = 'shop_wide'/);
+  assert.match(crossing, /applicability_type = 'selected_branches'/);
+  // One row per offer, not one per branch the offer happens to reach.
+  assert.match(crossing, /COUNT\(DISTINCT o\.id\)/);
+});
+
+test('the crossing is limited to the cities the app actually offers', async () => {
+  reset();
+  await sitemap.getSitemap();
+
+  const crossing = lastQueries.find((sql) => /GROUP BY c\.slug, b\.city/.test(sql));
+  // Eight placeholders, one per suggested city - not every string ever typed
+  // into a branch. The names themselves are bound, not interpolated.
+  assert.match(crossing, /b\.city IN \(\?, \?, \?, \?, \?, \?, \?, \?\)/);
+});
+
+test('a city becomes the slug the route turns back into its own name', async () => {
+  reset({
+    categoryCities: [
+      { slug: 'clothing', city: 'Bengaluru', updated_at: null, offer_count: 1 },
+      // Spacing and case are the branch row's, not the URL's.
+      { slug: 'food', city: 'New Delhi', updated_at: null, offer_count: 1 },
+    ],
+  });
+  const xml = await sitemap.getSitemap();
+
+  assert.match(xml, new RegExp(`<loc>${env.appUrl}/offers/c/clothing/bengaluru</loc>`));
+  assert.match(xml, new RegExp(`<loc>${env.appUrl}/offers/c/food/new-delhi</loc>`));
 });
 
 test('offers and services are emitted by id', async () => {
