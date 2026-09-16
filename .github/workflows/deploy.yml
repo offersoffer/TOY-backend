@@ -1,0 +1,50 @@
+# Push to main -> the API and AI service on the EC2 box are updated.
+#
+# The work itself lives in deploy-backend.sh on the server, which is also what
+# you run by hand; this only decides when it happens. Keeping the steps there
+# rather than here means a manual deploy and an automatic one cannot drift.
+#
+# Deliberately NOT here: database migrations. deploy-backend.sh says so too - a
+# migration can be destructive and is not something a git push should trigger
+# unwatched. When a release changes src/db/schema.sql, run `npm run db:migrate`
+# as the migration user first, then let this deploy the code.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # so a deploy can be re-run without an empty commit
+
+# A second push while one deploy is mid-flight would interleave two npm
+# installs and two systemctl restarts on the same box.
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      # The gate. A red suite must not reach the server.
+      - run: npm test
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run the server's own deploy script
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          # The script ends by polling /health and exits non-zero if the API
+          # does not come back, so a failed restart shows up as a failed run
+          # rather than a green tick over a dead service.
+          script: sudo /srv/offersoffer/deploy-backend.sh
