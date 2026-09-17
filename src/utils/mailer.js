@@ -22,6 +22,32 @@ const { maskEmail } = require('./mask');
 /** True when a real SMTP transport is configured. */
 const isConfigured = Boolean(env.mail.host);
 
+/**
+ * What the transport is actually doing - which is not the same question as
+ * whether it is configured.
+ *
+ * `isConfigured` only asks whether SMTP_HOST is set. On 17 Sep a health probe
+ * reported mail as fine for fifteen minutes while Gmail rejected every login,
+ * because the password had been replaced with an account password instead of an
+ * app password. The server knew - MAIL_TRANSPORT_UNAVAILABLE was in the journal
+ * - but nothing surfaced it.
+ *
+ *   not-configured  no SMTP_HOST; mail goes to the outbox by design
+ *   unverified      configured, but nothing has been proven yet
+ *   ready           a login or a send has succeeded
+ *   unavailable     a login or a send has failed
+ *
+ * Updated by the boot check and by every send, so a credential revoked while
+ * the process runs turns the status over on the first failure rather than
+ * waiting for a restart. Nothing re-verifies on a timer: a liveness probe must
+ * not open an SMTP session, and polling Gmail to answer it would be worse than
+ * the problem.
+ */
+let transportStatus = isConfigured ? 'unverified' : 'not-configured';
+
+/** The transport's last known state. See `transportStatus`. */
+const status = () => transportStatus;
+
 const OUTBOX_DIR = path.resolve(__dirname, '../../mail-outbox');
 
 let transporter = null;
@@ -101,6 +127,7 @@ async function send({ to, subject, text, html }) {
       html,
       attachments: logoAttachment(),
     });
+    transportStatus = 'ready';
     return { delivered: true, transport: 'smtp' };
   } catch (error) {
     // §37: the subject is logged, the recipient is masked, the body never is.
@@ -116,6 +143,7 @@ async function send({ to, subject, text, html }) {
       },
       'Could not send email',
     );
+    transportStatus = 'unavailable';
     return { delivered: false, transport: 'smtp', error: error.message };
   }
 }
@@ -130,6 +158,7 @@ async function verifyTransport() {
       { event: 'MAIL_TRANSPORT_NOT_CONFIGURED', dependency: 'EMAIL', outbox_dir: OUTBOX_DIR },
       'SMTP_HOST is empty - verification and password-reset emails will be written to the outbox. See .env.example.',
     );
+    transportStatus = 'not-configured';
     return false;
   }
 
@@ -139,6 +168,7 @@ async function verifyTransport() {
       { event: 'MAIL_TRANSPORT_READY', dependency: 'EMAIL', smtp_host: env.mail.host, smtp_port: env.mail.port },
       `SMTP ready at ${env.mail.host}:${env.mail.port}`,
     );
+    transportStatus = 'ready';
     return true;
   } catch (error) {
     // §7 FATAL is for the process being unable to run; mail is degraded, not
@@ -156,6 +186,7 @@ async function verifyTransport() {
       },
       `SMTP at ${env.mail.host}:${env.mail.port} is not working; emails will fail until it is fixed`,
     );
+    transportStatus = 'unavailable';
     return false;
   }
 }
@@ -377,4 +408,4 @@ const templates = {
   }),
 };
 
-module.exports = { send, templates, verifyTransport, isConfigured, OUTBOX_DIR, BRAND };
+module.exports = { send, templates, verifyTransport, isConfigured, status, OUTBOX_DIR, BRAND };

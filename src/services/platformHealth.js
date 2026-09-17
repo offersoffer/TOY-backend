@@ -36,6 +36,17 @@ const STATUS = {
   NOT_CONFIGURED: 'not_configured',
 };
 
+/**
+ * The mail transport's own vocabulary, mapped onto this dashboard's.
+ * `unverified` is healthy-until-proven-otherwise: configured, nothing sent yet.
+ */
+const MAIL_STATUS = {
+  'not-configured': STATUS.NOT_CONFIGURED,
+  unverified: STATUS.HEALTHY,
+  ready: STATUS.HEALTHY,
+  unavailable: STATUS.DOWN,
+};
+
 /** Ordered as §34 lists them, which is the order the board renders. */
 const COMPONENTS = [
   { key: 'api', label: 'API' },
@@ -388,7 +399,9 @@ async function board() {
     overall,
     checkedAt: new Date(),
     components,
-    email: mailer.isConfigured ? STATUS.HEALTHY : STATUS.NOT_CONFIGURED,
+    // Not `isConfigured`: a configured transport Gmail refuses to log into is
+    // down, and this dashboard exists to say so.
+    email: MAIL_STATUS[mailer.status()] ?? STATUS.NOT_CONFIGURED,
   };
 }
 

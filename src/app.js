@@ -114,8 +114,11 @@ app.get('/health', async (_req, res) => {
     data: {
       status: database ? 'ok' : 'degraded',
       database,
-      // Surfaced so "why did no email arrive?" is answerable without log access.
-      email: mailer.isConfigured ? 'smtp' : 'not-configured',
+      // Surfaced so "why did no email arrive?" is answerable without log
+      // access - which means it has to report what the transport is doing, not
+      // merely that SMTP_HOST is set. `not-configured` | `unverified` |
+      // `ready` | `unavailable`; see mailer.status().
+      email: mailer.status(),
       uptime: process.uptime(),
     },
   });
