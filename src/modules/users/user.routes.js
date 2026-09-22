@@ -14,6 +14,10 @@ const { limitOffset, paginationSchema } = require('../../utils/pagination');
 const { ok, created, noContent, paginated } = require('../../utils/respond');
 const accessControl = require('../../services/accessControl');
 const shopService = require('../shops/shop.service');
+const passwordUtil = require('../../utils/password');
+const storage = require('../../services/storage');
+const logger = require('../../utils/logger');
+const { SUPER_ADMIN_ROLE } = require('../../config/permissions');
 
 const router = express.Router();
 
@@ -139,6 +143,113 @@ router.put(
       [req.user.id],
     );
     ok(res, mapUser(row));
+  }),
+);
+
+/**
+ * Account deletion (Google Play "Data deletion" policy; Apple 5.1.1(v)).
+ *
+ * Both stores require an in-app path that actually deletes the account and its
+ * personal data, not merely a support request. The schema already makes that
+ * safe: every FK to `users` is either ON DELETE CASCADE for personal data
+ * (claims, favorites, reviews, notifications, push devices, search history,
+ * sessions, shop memberships) or ON DELETE SET NULL for records the business
+ * has to keep (audit logs, offer authorship, redemption history). So one DELETE
+ * does the right thing, and this route is mostly about *refusing* in the two
+ * cases where it would not.
+ */
+const deleteAccountSchema = z.object({
+  // Re-authentication. The action is irreversible, so an unlocked handset must
+  // not be enough on its own.
+  password: z.string().min(1, { message: 'Enter your password to confirm' }),
+});
+
+router.delete(
+  '/me',
+  validate({ body: deleteAccountSchema }),
+  asyncHandler(async (req, res) => {
+    const user = await queryOne('SELECT * FROM users WHERE id = ?', [req.user.id]);
+    if (!user) throw ApiError.notFound('User not found');
+
+    const matches = await passwordUtil.compare(req.body.password, user.password_hash);
+    if (!matches) throw ApiError.badRequest('Password is incorrect');
+
+    // A Super Admin is platform staff, not a customer. There may be exactly
+    // one, and §28 wants an administrator's removal to be a deliberate audited
+    // act by another administrator rather than a button on a phone.
+    const superAdmin = await queryOne(
+      `SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+        WHERE ur.user_id = ? AND r.name = ?`,
+      [req.user.id, SUPER_ADMIN_ROLE],
+    );
+    if (superAdmin) {
+      throw ApiError.forbidden(
+        'Platform administrator accounts cannot be deleted from the app. ' +
+          'Contact support so another administrator can remove it.',
+      );
+    }
+
+    // A shop has no owner column - only `created_by`, which is SET NULL, and a
+    // `shop_members` row, which cascades. Deleting a shop's Admin would
+    // therefore leave a live shop with running offers that nobody can manage.
+    // Refuse and say what to do instead, rather than quietly taking a
+    // merchant's business down with their account.
+    const managedShops = await query(
+      `SELECT s.id, s.name
+         FROM shop_members sm
+         JOIN shops s ON s.id = sm.shop_id
+         JOIN roles r ON r.id = sm.role_id
+        WHERE sm.user_id = ? AND sm.status = 'active' AND r.name = 'ADMIN'
+        ORDER BY s.name`,
+      [req.user.id],
+    );
+    if (managedShops.length) {
+      const names = managedShops.map((row) => row.name).join(', ');
+      throw new ApiError(
+        409,
+        `You manage ${managedShops.length === 1 ? 'a shop' : 'shops'} on OffersOffer (${names}). ` +
+          'Transfer it to another admin, or ask support to close it, before deleting your account.',
+        { shops: managedShops.map((row) => ({ id: Number(row.id), name: row.name })) },
+        'CONFLICT',
+      );
+    }
+
+    // Written before the DELETE, not after: `audit_logs.user_id` is SET NULL on
+    // delete, so afterwards nothing identifies the row. The email is recorded
+    // deliberately - it is the only way to answer "was this person's account
+    // deleted, and when" once the user row is gone.
+    await audit.record(req, {
+      action: 'ACCOUNT_DELETED',
+      entityType: 'user',
+      entityId: req.user.id,
+      oldValue: { id: Number(user.id), name: user.name, email: user.email },
+    });
+
+    // Best effort, and deliberately before the row disappears: once the user is
+    // gone the avatar URL is unrecoverable, so failing here would strand an
+    // object in S3 forever. A storage outage must not block the deletion
+    // itself, which is the part the user has a right to.
+    if (user.avatar_url) {
+      try {
+        await storage.remove(user.avatar_url);
+      } catch (error) {
+        logger.warn(
+          { event: 'AVATAR_CLEANUP_FAILED', user_id: Number(user.id) },
+          'Account deleted but its avatar could not be removed from storage',
+        );
+      }
+    }
+
+    // One statement; InnoDB applies every cascade atomically. Refresh tokens go
+    // with it, so every device is signed out as a side effect.
+    await execute('DELETE FROM users WHERE id = ?', [req.user.id]);
+
+    logger.info(
+      { event: 'ACCOUNT_DELETED', user_id: Number(user.id) },
+      'User deleted their own account',
+    );
+
+    noContent(res);
   }),
 );
 
