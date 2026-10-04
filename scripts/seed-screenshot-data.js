@@ -81,16 +81,16 @@ const OFFER_IMAGES = {
   "Screen replacement + tempered glass": "https://thumb.wikimedia.org/wikipedia/commons/thumb/5/5c/Broken_Apple_iPhone_5C_Pink_Shallow_Focus.JPG/960px-Broken_Apple_iPhone_5C_Pink_Shallow_Focus.JPG",
   "Wireless earbuds clearance": "https://thumb.wikimedia.org/wikipedia/commons/thumb/9/90/ActiveSound_wireless_earbuds_by_Hykker_%28POJM200483%29.jpg/960px-ActiveSound_wireless_earbuds_by_Hykker_%28POJM200483%29.jpg",
   "Full body health check": "https://thumb.wikimedia.org/wikipedia/commons/thumb/f/f3/2026_-_Blood_test_samples.jpg/960px-2026_-_Blood_test_samples.jpg",
-  "Quarterly membership": "https://thumb.wikimedia.org/wikipedia/commons/thumb/e/e9/Colorful_gym_equipment.jpg/960px-Colorful_gym_equipment.jpg",
+  "Quarterly membership": "https://thumb.wikimedia.org/wikipedia/commons/thumb/5/50/A_close-up_view_of_a_set_of_heavy_dumbbells.jpg/960px-A_close-up_view_of_a_set_of_heavy_dumbbells.jpg",
   "Breakfast for two": "https://thumb.wikimedia.org/wikipedia/commons/thumb/c/c9/Aesthetic_Medu_Vadai.jpg/960px-Aesthetic_Medu_Vadai.jpg",
   "Filter coffee powder — 500g": "https://upload.wikimedia.org/wikipedia/commons/7/7a/Disassembled_South_Indian_coffee_filter.jpg",
-  "Hair spa + cut + blow dry": "https://thumb.wikimedia.org/wikipedia/commons/thumb/0/0a/A_beauty_salon_in_Iran%2C_Mashhad%2C_Free_Photo_Wikipedia%2C_Mostafa_Meraji_01.jpg/960px-A_beauty_salon_in_Iran%2C_Mashhad%2C_Free_Photo_Wikipedia%2C_Mostafa_Meraji_01.jpg",
+  "Hair spa + cut + blow dry": "https://thumb.wikimedia.org/wikipedia/commons/thumb/6/62/Cutting_hair_-_haircuts.jpg/960px-Cutting_hair_-_haircuts.jpg",
   "Bridal package booking": "https://thumb.wikimedia.org/wikipedia/commons/thumb/1/12/Bridal_makeup_for_Indian_Wedding.jpg/960px-Bridal_makeup_for_Indian_Wedding.jpg",
   "Running shoes — season change": "https://thumb.wikimedia.org/wikipedia/commons/thumb/8/8b/Asics_Gel-Cumulus_22.jpg/960px-Asics_Gel-Cumulus_22.jpg",
   "Badminton racket + stringing": "https://thumb.wikimedia.org/wikipedia/commons/thumb/0/0f/Badminton_Racket.jpg/960px-Badminton_Racket.jpg",
   "Stainless steel cookware set": "https://thumb.wikimedia.org/wikipedia/commons/thumb/f/f3/Hahn_Stainless_Pan_Range.jpg/960px-Hahn_Stainless_Pan_Range.jpg",
   "Bedsheets and towels": "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ac/HSY-_Folded_Towels.jpg/960px-HSY-_Folded_Towels.jpg",
-  "Celebration cake — 1kg": "https://thumb.wikimedia.org/wikipedia/commons/thumb/9/9b/A_birthday_cake_2.jpg/960px-A_birthday_cake_2.jpg",
+  "Celebration cake — 1kg": "https://thumb.wikimedia.org/wikipedia/commons/thumb/6/6e/8-Layer_Chocolate_Hazelnut_Cake.jpg/960px-8-Layer_Chocolate_Hazelnut_Cake.jpg",
 };
 
 /**
@@ -99,8 +99,12 @@ const OFFER_IMAGES = {
  * Without one the shop page opens on an empty band roughly a third of the
  * screen deep, which reads as a broken image rather than as a shop that has
  * not uploaded one. Resolved and verified the same way as OFFER_IMAGES, with
- * archival results filtered out - Commons is full of 1920s storefronts, and a
- * sepia bakery in a modern app looks like a bug rather than character.
+ * Every one of these was looked at, not just resolved. Filenames are not
+ * enough: the first pass put a shuttered Bengali sweet shop at night on one,
+ * a roadside barber under a tree on a bridal salon, and an American petrol
+ * station on the sports shop - all with plausible titles. Four of ten were
+ * wrong that way, so they were tiled into one contact sheet and checked by
+ * eye. Do the same before trusting a replacement.
  *
  * No logos: the placeholder storefront glyph the app already draws is a
  * deliberate, tidy empty state, and an invented brand mark would be the one
@@ -108,13 +112,13 @@ const OFFER_IMAGES = {
  */
 const SHOP_COVERS = {
   "Vaigai Silks": "https://upload.wikimedia.org/wikipedia/commons/1/1a/Bengal_saris_on_display.jpg",
-  "Simmakkal Sweets & Snacks": "https://thumb.wikimedia.org/wikipedia/commons/thumb/5/55/Dwarik%27s_Grand_Son_sweet_shop_01.jpg/1280px-Dwarik%27s_Grand_Son_sweet_shop_01.jpg",
-  "Temple City Mobiles": "https://upload.wikimedia.org/wikipedia/commons/d/d0/Mobile_Phone_Shop%2C_Omagh_-_geograph.org.uk_-_142162.jpg",
+  "Simmakkal Sweets & Snacks": "https://thumb.wikimedia.org/wikipedia/commons/thumb/e/e3/A_tray_full_of_Indian_sweets_mithai_desserts_c.jpg/1280px-A_tray_full_of_Indian_sweets_mithai_desserts_c.jpg",
+  "Temple City Mobiles": "https://thumb.wikimedia.org/wikipedia/commons/thumb/e/e3/Samsung_Galaxy_Z_Fold3_5G.jpg/960px-Samsung_Galaxy_Z_Fold3_5G.jpg",
   "Pandian Health Pharmacy": "https://thumb.wikimedia.org/wikipedia/commons/thumb/2/2d/Brest_Greenberg_Pharmacy_Interior_2024-09-20_3798.jpg/1280px-Brest_Greenberg_Pharmacy_Interior_2024-09-20_3798.jpg",
   "Anna Nagar Fitness Club": "https://thumb.wikimedia.org/wikipedia/commons/thumb/0/02/GymNation_gym_interior_2024.jpg/1280px-GymNation_gym_interior_2024.jpg",
   "Kovai Coffee House": "https://thumb.wikimedia.org/wikipedia/commons/thumb/3/3f/2019_02_Awesome_Coffee_Shop_in_Korat.jpg/1280px-2019_02_Awesome_Coffee_Shop_in_Korat.jpg",
-  "R.S. Puram Beauty Lounge": "https://thumb.wikimedia.org/wikipedia/commons/thumb/d/d0/Somewhere_in_Bihar_3_-_gents_beauty_parlour_%2833614737672%29.jpg/1280px-Somewhere_in_Bihar_3_-_gents_beauty_parlour_%2833614737672%29.jpg",
-  "Peelamedu Sports Hub": "https://thumb.wikimedia.org/wikipedia/commons/thumb/5/5e/Big_Bend_Sporting_Goods%2C_Blountstown%2C_Florida.jpg/1280px-Big_Bend_Sporting_Goods%2C_Blountstown%2C_Florida.jpg",
+  "R.S. Puram Beauty Lounge": "https://upload.wikimedia.org/wikipedia/commons/b/b2/Hair_Salon_Stations.jpg",
+  "Peelamedu Sports Hub": "https://thumb.wikimedia.org/wikipedia/commons/thumb/1/13/Academy_Sports_%2B_Outdoors_-_Sarah_Stierch_-_May_2024_03.jpg/1280px-Academy_Sports_%2B_Outdoors_-_Sarah_Stierch_-_May_2024_03.jpg",
   "Noyyal Home Essentials": "https://thumb.wikimedia.org/wikipedia/commons/thumb/0/01/1-2-3-4_Cake_cooking_implements.JPG/1280px-1-2-3-4_Cake_cooking_implements.JPG",
   "Race Course Bakers": "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/a0/Bakery_products_of_Caf%C3%A9_W%2C_Brighton_2024-04-25.jpg/1280px-Bakery_products_of_Caf%C3%A9_W%2C_Brighton_2024-04-25.jpg",
 };
