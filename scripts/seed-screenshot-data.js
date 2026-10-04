@@ -92,6 +92,32 @@ const OFFER_IMAGES = {
   "Celebration cake — 1kg": "https://thumb.wikimedia.org/wikipedia/commons/thumb/9/9b/A_birthday_cake_2.jpg/960px-A_birthday_cake_2.jpg",
 };
 
+/**
+ * A storefront photograph per shop, for the banner at the top of a shop page.
+ *
+ * Without one the shop page opens on an empty band roughly a third of the
+ * screen deep, which reads as a broken image rather than as a shop that has
+ * not uploaded one. Resolved and verified the same way as OFFER_IMAGES, with
+ * archival results filtered out - Commons is full of 1920s storefronts, and a
+ * sepia bakery in a modern app looks like a bug rather than character.
+ *
+ * No logos: the placeholder storefront glyph the app already draws is a
+ * deliberate, tidy empty state, and an invented brand mark would be the one
+ * piece of this seed pretending to be something it is not.
+ */
+const SHOP_COVERS = {
+  "Vaigai Silks": "https://upload.wikimedia.org/wikipedia/commons/a/af/40_Cowgate_-_Sari_Shop_-_geograph.org.uk_-_5930901.jpg",
+  "Simmakkal Sweets & Snacks": "https://thumb.wikimedia.org/wikipedia/commons/thumb/5/55/Dwarik%27s_Grand_Son_sweet_shop_01.jpg/1280px-Dwarik%27s_Grand_Son_sweet_shop_01.jpg",
+  "Temple City Mobiles": "https://upload.wikimedia.org/wikipedia/commons/d/d0/Mobile_Phone_Shop%2C_Omagh_-_geograph.org.uk_-_142162.jpg",
+  "Pandian Health Pharmacy": "https://thumb.wikimedia.org/wikipedia/commons/thumb/2/2d/Brest_Greenberg_Pharmacy_Interior_2024-09-20_3798.jpg/1280px-Brest_Greenberg_Pharmacy_Interior_2024-09-20_3798.jpg",
+  "Anna Nagar Fitness Club": "https://thumb.wikimedia.org/wikipedia/commons/thumb/0/02/GymNation_gym_interior_2024.jpg/1280px-GymNation_gym_interior_2024.jpg",
+  "Kovai Coffee House": "https://thumb.wikimedia.org/wikipedia/commons/thumb/3/3f/2019_02_Awesome_Coffee_Shop_in_Korat.jpg/1280px-2019_02_Awesome_Coffee_Shop_in_Korat.jpg",
+  "R.S. Puram Beauty Lounge": "https://thumb.wikimedia.org/wikipedia/commons/thumb/d/d0/Somewhere_in_Bihar_3_-_gents_beauty_parlour_%2833614737672%29.jpg/1280px-Somewhere_in_Bihar_3_-_gents_beauty_parlour_%2833614737672%29.jpg",
+  "Peelamedu Sports Hub": "https://thumb.wikimedia.org/wikipedia/commons/thumb/5/5e/Big_Bend_Sporting_Goods%2C_Blountstown%2C_Florida.jpg/1280px-Big_Bend_Sporting_Goods%2C_Blountstown%2C_Florida.jpg",
+  "Noyyal Home Essentials": "https://upload.wikimedia.org/wikipedia/commons/e/e4/Dodgshons_Kitchenware_%5E_Pet_Shop_-_Clapgate_-_geograph.org.uk_-_1914930.jpg",
+  "Race Course Bakers": "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/a0/Bakery_products_of_Caf%C3%A9_W%2C_Brighton_2024-04-25.jpg/1280px-Bakery_products_of_Caf%C3%A9_W%2C_Brighton_2024-04-25.jpg",
+};
+
 const SHOPS = [
   {
     name: 'Vaigai Silks',
@@ -466,9 +492,9 @@ async function seed() {
     }
 
     const shopResult = await execute(
-      `INSERT INTO shops (name, slug, description, contact_number, status, acquisition_channel)
-       VALUES (?, ?, ?, ?, 'active', ?)`,
-      [shop.name, slugify(shop.name), shop.description, shop.phone, TAG],
+      `INSERT INTO shops (name, slug, description, cover_url, contact_number, status, acquisition_channel)
+       VALUES (?, ?, ?, ?, ?, 'active', ?)`,
+      [shop.name, slugify(shop.name), shop.description, SHOP_COVERS[shop.name] ?? null, shop.phone, TAG],
     );
     const shopId = shopResult.insertId;
 
