@@ -58,6 +58,40 @@ const day = (offset) => {
 // 11.016 N, 76.955 E, so each branch is placed in its actual neighbourhood.
 // ---------------------------------------------------------------------------
 
+/**
+ * One photograph per offer, keyed by offer title.
+ *
+ * Wikimedia Commons rather than a placeholder service: the cards needed
+ * pictures of the actual thing being sold, and the free keyword services are
+ * either dead (source.unsplash.com returns 503) or give a random subject, so a
+ * cake offer would show a mountain. Every URL here was resolved by searching
+ * Commons for the product and then fetched to confirm it returns 200 with an
+ * image content type - a 404 in a store screenshot is worse than no picture.
+ *
+ * These are freely licensed and go in `offer_images.image_url`, which takes a
+ * full URL, so nothing has to be uploaded to S3 for this. They disappear with
+ * the shops on --clean. For a real listing a merchant uploads their own.
+ */
+const OFFER_IMAGES = {
+  "Bridal silk collection": "https://thumb.wikimedia.org/wikipedia/commons/thumb/f/f1/Kanchipuram_silk_sareer.JPG/960px-Kanchipuram_silk_sareer.JPG",
+  "Cotton saree festive pack": "https://thumb.wikimedia.org/wikipedia/commons/thumb/b/b5/Border_of_Tangail_sari%2Cfrom_the_1970s.jpg/960px-Border_of_Tangail_sari%2Cfrom_the_1970s.jpg",
+  "Madurai halwa — half kilo box": "https://thumb.wikimedia.org/wikipedia/commons/thumb/1/17/Bombay_Halwa%2C_Karachi_Halwa.jpg/960px-Bombay_Halwa%2C_Karachi_Halwa.jpg",
+  "Evening snack combo": "https://thumb.wikimedia.org/wikipedia/commons/thumb/8/80/Capsicum_bajji.jpg/960px-Capsicum_bajji.jpg",
+  "Screen replacement + tempered glass": "https://thumb.wikimedia.org/wikipedia/commons/thumb/5/5c/Broken_Apple_iPhone_5C_Pink_Shallow_Focus.JPG/960px-Broken_Apple_iPhone_5C_Pink_Shallow_Focus.JPG",
+  "Wireless earbuds clearance": "https://thumb.wikimedia.org/wikipedia/commons/thumb/9/90/ActiveSound_wireless_earbuds_by_Hykker_%28POJM200483%29.jpg/960px-ActiveSound_wireless_earbuds_by_Hykker_%28POJM200483%29.jpg",
+  "Full body health check": "https://thumb.wikimedia.org/wikipedia/commons/thumb/f/f3/2026_-_Blood_test_samples.jpg/960px-2026_-_Blood_test_samples.jpg",
+  "Quarterly membership": "https://thumb.wikimedia.org/wikipedia/commons/thumb/e/e9/Colorful_gym_equipment.jpg/960px-Colorful_gym_equipment.jpg",
+  "Breakfast for two": "https://thumb.wikimedia.org/wikipedia/commons/thumb/c/c9/Aesthetic_Medu_Vadai.jpg/960px-Aesthetic_Medu_Vadai.jpg",
+  "Filter coffee powder — 500g": "https://upload.wikimedia.org/wikipedia/commons/7/7a/Disassembled_South_Indian_coffee_filter.jpg",
+  "Hair spa + cut + blow dry": "https://thumb.wikimedia.org/wikipedia/commons/thumb/0/0a/A_beauty_salon_in_Iran%2C_Mashhad%2C_Free_Photo_Wikipedia%2C_Mostafa_Meraji_01.jpg/960px-A_beauty_salon_in_Iran%2C_Mashhad%2C_Free_Photo_Wikipedia%2C_Mostafa_Meraji_01.jpg",
+  "Bridal package booking": "https://thumb.wikimedia.org/wikipedia/commons/thumb/1/12/Bridal_makeup_for_Indian_Wedding.jpg/960px-Bridal_makeup_for_Indian_Wedding.jpg",
+  "Running shoes — season change": "https://thumb.wikimedia.org/wikipedia/commons/thumb/8/8b/Asics_Gel-Cumulus_22.jpg/960px-Asics_Gel-Cumulus_22.jpg",
+  "Badminton racket + stringing": "https://thumb.wikimedia.org/wikipedia/commons/thumb/0/0f/Badminton_Racket.jpg/960px-Badminton_Racket.jpg",
+  "Stainless steel cookware set": "https://thumb.wikimedia.org/wikipedia/commons/thumb/f/f3/Hahn_Stainless_Pan_Range.jpg/960px-Hahn_Stainless_Pan_Range.jpg",
+  "Bedsheets and towels": "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ac/HSY-_Folded_Towels.jpg/960px-HSY-_Folded_Towels.jpg",
+  "Celebration cake — 1kg": "https://thumb.wikimedia.org/wikipedia/commons/thumb/9/9b/A_birthday_cake_2.jpg/960px-A_birthday_cake_2.jpg",
+};
+
 const SHOPS = [
   {
     name: 'Vaigai Silks',
@@ -450,7 +484,7 @@ async function seed() {
     );
 
     for (const offer of shop.offers) {
-      await execute(
+      const offerResult = await execute(
         `INSERT INTO offers
            (shop_id, category_id, title, product_name, description, offer_text,
             offer_type, discount_type, discount_value, original_price, discounted_price,
@@ -477,6 +511,14 @@ async function seed() {
           day(45),
         ],
       );
+      const image = OFFER_IMAGES[offer.title];
+      if (image) {
+        await execute(
+          `INSERT INTO offer_images (offer_id, image_url, display_order) VALUES (?, ?, 0)`,
+          [offerResult.insertId, image],
+        );
+      }
+
       offerCount += 1;
     }
 
