@@ -180,12 +180,18 @@ const SHOT = { w: 1080, h: 1920 };
  * plainest promise rather than the cleverest line. Each file is matched by
  * position: screens/1.png gets CAPTIONS[0], and a missing file is skipped with
  * a warning rather than failing the run, so a partial set still builds.
+ *
+ * A caption may only describe what is visible in the picture above it. The
+ * second one used to promise a QR code; the screenshot shows the Claim button
+ * that produces one, not the code itself, and a store listing that shows one
+ * thing while saying another is the kind of small dishonesty reviewers and
+ * customers both notice.
  */
 const CAPTIONS = [
   ['Offers near you', 'Real discounts from shops in your city'],
-  ['Claim in seconds', 'Show the QR code in store — that is it'],
-  ['Find what is close', 'Browse by category or by how far you will walk'],
-  ['Never miss one', 'Follow your shops and get told when they post'],
+  ['Claim in seconds', 'One tap, then show it at the counter'],
+  ['Everything close by', 'Sorted by how far you actually have to walk'],
+  ['Follow the shops you like', 'Save a shop and hear when it posts something new'],
 ];
 
 /** The frame: brand ground, caption above, a bezelled capture below. */
@@ -261,13 +267,21 @@ async function main() {
 
     const [heading, sub] = CAPTIONS[i];
 
-    // The capture keeps its own aspect ratio inside a fixed width, so a 19.5:9
-    // phone and a 16:9 one both sit correctly rather than being stretched to
-    // whatever the frame assumed.
+    // Fit the capture to the room actually left below the caption, rather than
+    // to a fixed width. A 1080x2400 phone is 2.22 times taller than it is wide:
+    // at the 820px width this used to assume, it stood 1822px tall in a band
+    // 1420px deep and ran off the bottom of the artboard, taking the bezel's
+    // lower corners and the last row of cards with it.
     const meta = await sharp(source).metadata();
-    const width = 820;
+    const TOP = 500;
+    const BOTTOM_MARGIN = 72;
+    const room = SHOT.h - TOP - BOTTOM_MARGIN;
+    const byHeight = Math.round((room * meta.width) / meta.height);
+    const width = Math.min(820, byHeight);
     const height = Math.round((width * meta.height) / meta.width);
-    const box = { x: Math.round((SHOT.w - width) / 2), y: 500, width, height };
+    // Centre whatever is left over, so a shorter capture does not sit high.
+    const y = TOP + Math.round((room - height) / 2);
+    const box = { x: Math.round((SHOT.w - width) / 2), y, width, height };
 
     const frame = await sharp(Buffer.from(shotFrame(heading, sub, box)), { density: 400 })
       .resize({ width: SHOT.w, height: SHOT.h })
