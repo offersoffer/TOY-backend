@@ -34,6 +34,7 @@ const { query, queryOne, execute } = require('../src/db/pool');
 
 const TAG = 'SCREENSHOT_SEED';
 const CLEAN = process.argv.includes('--clean');
+const REFRESH = process.argv.includes('--refresh-images');
 const DRY = process.argv.includes('--dry');
 
 const slugify = (name) =>
@@ -106,7 +107,7 @@ const OFFER_IMAGES = {
  * piece of this seed pretending to be something it is not.
  */
 const SHOP_COVERS = {
-  "Vaigai Silks": "https://upload.wikimedia.org/wikipedia/commons/a/af/40_Cowgate_-_Sari_Shop_-_geograph.org.uk_-_5930901.jpg",
+  "Vaigai Silks": "https://upload.wikimedia.org/wikipedia/commons/1/1a/Bengal_saris_on_display.jpg",
   "Simmakkal Sweets & Snacks": "https://thumb.wikimedia.org/wikipedia/commons/thumb/5/55/Dwarik%27s_Grand_Son_sweet_shop_01.jpg/1280px-Dwarik%27s_Grand_Son_sweet_shop_01.jpg",
   "Temple City Mobiles": "https://upload.wikimedia.org/wikipedia/commons/d/d0/Mobile_Phone_Shop%2C_Omagh_-_geograph.org.uk_-_142162.jpg",
   "Pandian Health Pharmacy": "https://thumb.wikimedia.org/wikipedia/commons/thumb/2/2d/Brest_Greenberg_Pharmacy_Interior_2024-09-20_3798.jpg/1280px-Brest_Greenberg_Pharmacy_Interior_2024-09-20_3798.jpg",
@@ -114,7 +115,7 @@ const SHOP_COVERS = {
   "Kovai Coffee House": "https://thumb.wikimedia.org/wikipedia/commons/thumb/3/3f/2019_02_Awesome_Coffee_Shop_in_Korat.jpg/1280px-2019_02_Awesome_Coffee_Shop_in_Korat.jpg",
   "R.S. Puram Beauty Lounge": "https://thumb.wikimedia.org/wikipedia/commons/thumb/d/d0/Somewhere_in_Bihar_3_-_gents_beauty_parlour_%2833614737672%29.jpg/1280px-Somewhere_in_Bihar_3_-_gents_beauty_parlour_%2833614737672%29.jpg",
   "Peelamedu Sports Hub": "https://thumb.wikimedia.org/wikipedia/commons/thumb/5/5e/Big_Bend_Sporting_Goods%2C_Blountstown%2C_Florida.jpg/1280px-Big_Bend_Sporting_Goods%2C_Blountstown%2C_Florida.jpg",
-  "Noyyal Home Essentials": "https://upload.wikimedia.org/wikipedia/commons/e/e4/Dodgshons_Kitchenware_%5E_Pet_Shop_-_Clapgate_-_geograph.org.uk_-_1914930.jpg",
+  "Noyyal Home Essentials": "https://thumb.wikimedia.org/wikipedia/commons/thumb/0/01/1-2-3-4_Cake_cooking_implements.JPG/1280px-1-2-3-4_Cake_cooking_implements.JPG",
   "Race Course Bakers": "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/a0/Bakery_products_of_Caf%C3%A9_W%2C_Brighton_2024-04-25.jpg/1280px-Bakery_products_of_Caf%C3%A9_W%2C_Brighton_2024-04-25.jpg",
 };
 
@@ -463,6 +464,53 @@ async function clean() {
   console.log('\nDeleted %d shop(s) and everything that hung off them.', result.affectedRows);
 }
 
+/**
+ * Re-points the pictures on shops that are already seeded.
+ *
+ * Choosing a photograph is iterative - the first pass put a Hungarian food
+ * shop on a silk retailer and museum pottery on a homeware shop, because
+ * Commons matches words rather than meaning. Fixing that by deleting and
+ * recreating ten shops churns their offers, their ids and their claim history
+ * for the sake of one column, so this updates in place instead.
+ */
+async function refreshImages() {
+  const shops = await query('SELECT id, name FROM shops WHERE acquisition_channel = ?', [TAG]);
+  if (!shops.length) {
+    console.log('Nothing to refresh: no shops tagged %s. Seed first.', TAG);
+    return;
+  }
+
+  let covers = 0;
+  let images = 0;
+
+  for (const shop of shops) {
+    const cover = SHOP_COVERS[shop.name];
+    if (cover) {
+      if (!DRY) await execute('UPDATE shops SET cover_url = ? WHERE id = ?', [cover, shop.id]);
+      covers += 1;
+    }
+
+    const offers = await query('SELECT id, title FROM offers WHERE shop_id = ?', [shop.id]);
+    for (const offer of offers) {
+      const image = OFFER_IMAGES[offer.title];
+      if (!image) continue;
+      if (!DRY) {
+        // Replace rather than add: running this twice must not leave an offer
+        // carrying two copies of its own picture.
+        await execute('DELETE FROM offer_images WHERE offer_id = ?', [offer.id]);
+        await execute(
+          'INSERT INTO offer_images (offer_id, image_url, display_order) VALUES (?, ?, 0)',
+          [offer.id, image],
+        );
+      }
+      images += 1;
+    }
+    console.log('  %s%s', DRY ? 'would refresh ' : '', shop.name);
+  }
+
+  console.log('\n%s%d cover(s) and %d offer image(s).', DRY ? '--dry: would set ' : 'Set ', covers, images);
+}
+
 async function seed() {
   const existing = await queryOne(
     'SELECT COUNT(*) AS n FROM shops WHERE acquisition_channel = ?',
@@ -563,7 +611,7 @@ async function seed() {
   }
 }
 
-(CLEAN ? clean() : seed())
+(CLEAN ? clean() : REFRESH ? refreshImages() : seed())
   .then(() => process.exit(0))
   .catch((error) => {
     console.error(error);
