@@ -10,7 +10,7 @@ const scope = require('./business.scope');
  *
  * The platform owner's numbers, as distinct from the merchant analytics in
  * `analytics/premium.service.js`: those answer "how is my shop doing?" for one
- * merchant, these answer "how is the Offers App business doing?" across all of
+ * merchant, these answer "how is the OffersOffer business doing?" across all of
  * them (§1: "This dashboard is separate from merchant dashboards").
  *
  * Every function takes the context the router builds:

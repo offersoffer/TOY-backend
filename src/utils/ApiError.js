@@ -54,7 +54,7 @@ class ApiError extends Error {
    * §37's [Retry] button acts on.
    */
   static serviceUnavailable(
-    message = 'We’re having trouble connecting to Offers App. Please try again.',
+    message = 'We’re having trouble connecting to OffersOffer. Please try again.',
   ) {
     return new ApiError(503, message, undefined, 'SERVICE_UNAVAILABLE');
   }
