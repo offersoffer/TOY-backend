@@ -112,12 +112,19 @@ const submitSchema = z.object({
 });
 
 /** §16: what the seller types when looking for a shop that may already exist. */
-const duplicateQuery = z.object({
-  name: trimmed(160).min(2),
-  city: trimmed(120).optional(),
-  pincode: trimmed(20).optional(),
-  contactNumber: trimmed(30).optional(),
-});
+const duplicateQuery = z
+  .object({
+    name: trimmed(160).optional(),
+    city: trimmed(120).optional(),
+    pincode: trimmed(20).optional(),
+    contactNumber: trimmed(30).optional(),
+  })
+  // A phone number alone is a perfectly good search, and often a better one
+  // than a name - but a request with neither would scan the whole table.
+  .refine((value) => (value.name?.length ?? 0) >= 2 || (value.contactNumber?.length ?? 0) >= 6, {
+    message: 'Search by shop name or contact number',
+    path: ['name'],
+  });
 
 const claimSchema = z.object({
   shopId: z.coerce.number().int().positive(),
@@ -126,6 +133,18 @@ const claimSchema = z.object({
 });
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
+
+/** §14, §16: a rejected claim carries an explanation the requester reads. */
+const claimRejectSchema = z.object({
+  reason: trimmed(1000).min(10, 'Say why, in a sentence the requester can act on'),
+});
+
+const claimListQuery = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  status: z.enum(['PENDING', 'APPROVED', 'REJECTED', 'WITHDRAWN']).optional(),
+  shopId: z.coerce.number().int().positive().optional(),
+});
 
 // ---- Reviewer side (§14) --------------------------------------------------
 
@@ -179,6 +198,8 @@ module.exports = {
   submitSchema,
   duplicateQuery,
   claimSchema,
+  claimRejectSchema,
+  claimListQuery,
   idParam,
   reviewListQuery,
   reasonRequired,

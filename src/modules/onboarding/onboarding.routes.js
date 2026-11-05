@@ -33,6 +33,39 @@ router.post(
   asyncHandler(controller.start),
 );
 
+/**
+ * §16: before creating a second copy of a shop we already have.
+ *
+ * Declared before `/:id` because Express matches in order and `duplicates`
+ * would otherwise be read as a registration id.
+ */
+router.get(
+  '/duplicates',
+  validate({ query: schema.duplicateQuery }),
+  asyncHandler(controller.duplicates),
+);
+
+/*
+  Claiming a shop that already exists (§16 steps 3-5). These grant nothing:
+  a claim is a request, and only a reviewer can turn one into access.
+*/
+router.get('/claims/me', asyncHandler(controller.myClaims));
+
+router.post(
+  '/claims',
+  onboardingLimiter,
+  validate({ body: schema.claimSchema }),
+  asyncHandler(controller.createClaim),
+);
+
+router.get('/claims/:id', validate({ params: schema.idParam }), asyncHandler(controller.getClaim));
+
+router.post(
+  '/claims/:id/withdraw',
+  validate({ params: schema.idParam }),
+  asyncHandler(controller.withdrawClaim),
+);
+
 router.get('/:id', validate({ params: schema.idParam }), asyncHandler(controller.get));
 
 router.patch(

@@ -7,6 +7,7 @@ const notifications = require('../../services/notifications');
 const logger = require('../../utils/logger');
 const { limitOffset } = require('../../utils/pagination');
 const onboarding = require('./onboarding.service');
+const claims = require('./claim.service');
 
 /**
  * Reviewing seller registrations (Self-Service Onboarding §14).
@@ -234,7 +235,7 @@ async function detail(shopId) {
     );
   }
 
-  const [registration, members, history] = await Promise.all([
+  const [registration, members, history, duplicates] = await Promise.all([
     onboarding.present(shop),
     query(
       `SELECT u.id, u.name, u.email, u.phone, sm.designation, sm.created_at AS joinedAt
@@ -244,6 +245,9 @@ async function detail(shopId) {
       [shopId],
     ),
     reviewHistory(shopId),
+    // §14: duplicate warnings on the detail. The reviewer's version sees
+    // other registrations in flight, which the seller's search never does.
+    claims.duplicatesFor(shopId),
   ]);
 
   const reviewer = shop.verification_reviewer_id
@@ -257,6 +261,7 @@ async function detail(shopId) {
     members,
     reviewer: reviewer ? { id: Number(reviewer.id), name: reviewer.name, email: reviewer.email } : null,
     history,
+    duplicates,
   };
 }
 

@@ -1,6 +1,7 @@
 'use strict';
 
 const service = require('./review.service');
+const claims = require('./claim.service');
 const audit = require('../../utils/audit');
 const shopVerification = require('../../services/shopVerification');
 const { ok, paginated } = require('../../utils/respond');
@@ -95,4 +96,41 @@ exports.setListing = async (req, res) => {
 
 exports.history = async (req, res) => {
   ok(res, await service.reviewHistory(req.params.id));
+};
+
+// ---- Claims on shops we already have (§16 steps 6-9) ----------------------
+
+exports.listClaims = async (req, res) => {
+  const { items, pagination } = await claims.listClaims(req.query);
+  paginated(res, items, pagination);
+};
+
+exports.getClaim = async (req, res) => {
+  ok(res, await claims.getClaim(req.params.id, req.user, { asReviewer: true }));
+};
+
+/**
+ * §16 step 9: an ownership change is the kind of thing that has to be
+ * accountable afterwards, so the grant is audited as well as notified.
+ */
+exports.approveClaim = async (req, res) => {
+  const claim = await claims.approveClaim(req.params.id, req.user);
+  await audit.record(req, {
+    action: 'SHOP_CLAIM_APPROVED',
+    entityType: 'shop',
+    entityId: claim.shopId,
+    newValue: { claimId: claim.id, grantedTo: claim.requester?.id, role: 'ADMIN' },
+  });
+  ok(res, claim);
+};
+
+exports.rejectClaim = async (req, res) => {
+  const claim = await claims.rejectClaim(req.params.id, req.body.reason, req.user);
+  await audit.record(req, {
+    action: 'SHOP_CLAIM_REJECTED',
+    entityType: 'shop',
+    entityId: claim.shopId,
+    newValue: { claimId: claim.id, reason: req.body.reason },
+  });
+  ok(res, claim);
 };

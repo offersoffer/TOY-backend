@@ -29,6 +29,36 @@ router.use(authenticate, requireGlobalPermission(shopVerification.REVIEW_PERMISS
 /** The queue, filtered and paginated (§14, §21). */
 router.get('/', validate({ query: schema.reviewListQuery }), asyncHandler(controller.list));
 
+/*
+  Claims on shops we already have (§16 steps 6-9). Declared before `/:id` so
+  Express does not read "claims" as a registration id, and under the same
+  permission: deciding who manages an existing shop is the same kind of
+  authority as deciding whether a new one is real.
+*/
+router.get(
+  '/claims',
+  validate({ query: schema.claimListQuery }),
+  asyncHandler(controller.listClaims),
+);
+
+router.get(
+  '/claims/:id',
+  validate({ params: schema.idParam }),
+  asyncHandler(controller.getClaim),
+);
+
+router.post(
+  '/claims/:id/approve',
+  validate({ params: schema.idParam }),
+  asyncHandler(controller.approveClaim),
+);
+
+router.post(
+  '/claims/:id/reject',
+  validate({ params: schema.idParam, body: schema.claimRejectSchema }),
+  asyncHandler(controller.rejectClaim),
+);
+
 router.get('/:id', validate({ params: schema.idParam }), asyncHandler(controller.detail));
 
 router.get('/:id/history', validate({ params: schema.idParam }), asyncHandler(controller.history));
