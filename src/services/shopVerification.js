@@ -81,6 +81,25 @@ function isAwaitingFirstApproval(verificationStatus) {
 /** Decisions only an authorised reviewer may make (§14). */
 const REVIEWER_ONLY = new Set([VERIFIED, REJECTED, ADDITIONAL_INFO_REQUIRED, SUSPENDED]);
 
+/** The grant that makes someone a reviewer (§14). */
+const REVIEW_PERMISSION = 'REVIEW_SELLER_REGISTRATIONS';
+
+/**
+ * May this user decide registrations?
+ *
+ * Checks `globalPermissions` rather than the effective set on purpose: a
+ * permission held through a shop membership is held *for that shop*, and a
+ * merchant who could review their own shop is exactly what §14 forbids. The
+ * check is written here rather than imported from `accessControl` because
+ * that module already imports this one, and a cycle between the two would
+ * make whichever loaded second see a half-built export.
+ */
+function mayReview(user) {
+  if (!user) return false;
+  if (user.isSuperAdmin) return true;
+  return Array.isArray(user.globalPermissions) && user.globalPermissions.includes(REVIEW_PERMISSION);
+}
+
 /** Decisions that must carry an explanation the seller will read (§14). */
 const REASON_REQUIRED = new Set([REJECTED, ADDITIONAL_INFO_REQUIRED]);
 
@@ -111,12 +130,12 @@ const ACTIVATION_REFUSAL = {
 /**
  * Refuses an activation the verification state does not allow.
  *
- * Super Admin is exempt: §14 gives them Activate as an explicit action, and
+ * Reviewers are exempt: §14 gives them Activate as an explicit action, and
  * somebody has to be able to switch a shop on after approving it.
  */
 function assertMayActivate(verificationStatus, user) {
   if (!blocksActivation(verificationStatus)) return;
-  if (user?.isSuperAdmin) return;
+  if (mayReview(user)) return;
 
   const why = ACTIVATION_REFUSAL[verificationStatus] ?? 'This shop cannot be made live yet.';
   throw ApiError.forbidden(`${why} It cannot be made live until that is resolved.`);
@@ -133,7 +152,7 @@ function assertTransition(from, to, user) {
     throw ApiError.badRequest(`Unknown verification status: ${to}`);
   }
 
-  if (REVIEWER_ONLY.has(to) && !user?.isSuperAdmin) {
+  if (REVIEWER_ONLY.has(to) && !mayReview(user)) {
     // §29.7: only authorised reviewers approve, and a merchant may never
     // approve their own shop. Checked here as well as at the route so a new
     // caller cannot reach the decision by a path that forgot the middleware.
@@ -172,6 +191,8 @@ module.exports = {
   SUSPENDED,
   STATUSES,
   TRANSITIONS,
+  REVIEW_PERMISSION,
+  mayReview,
   NEVER_APPROVED,
   isAwaitingFirstApproval,
   blocksActivation,

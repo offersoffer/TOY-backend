@@ -864,6 +864,38 @@ const STATEMENT_PATCHES = [
   },
 
   {
+    name: 'the seller-registration reviewer permission exists and Super Admin holds it',
+    // Onboarding §14. Same reasoning as the visibility grant above: the
+    // permission system resolves through the `permissions` table by name, so
+    // without this row the review routes answer 403 on any install that ran
+    // the migration but not the seeder - which is every existing deployment.
+    check: async (connection) => {
+      const [rows] = await connection.query(
+        `SELECT 1 FROM permissions WHERE name = 'REVIEW_SELLER_REGISTRATIONS' LIMIT 1`,
+      );
+      return rows.length === 0;
+    },
+    run: async (connection) => {
+      const entry = permissions.PERMISSIONS.REVIEW_SELLER_REGISTRATIONS;
+      await connection.query(
+        `INSERT INTO permissions (name, description, category) VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE description = VALUES(description), category = VALUES(category)`,
+        ['REVIEW_SELLER_REGISTRATIONS', entry.description, entry.category],
+      );
+      // Super Admin holds every permission by definition, and one added after
+      // the role was seeded is not granted retroactively by anything else.
+      // Deliberately not granted to ADMIN: a shop-scoped reviewer could
+      // approve their own registration (§14).
+      await connection.query(
+        `INSERT IGNORE INTO role_permissions (role_id, permission_id)
+         SELECT r.id, p.id FROM roles r
+           JOIN permissions p ON p.name = 'REVIEW_SELLER_REGISTRATIONS'
+          WHERE r.name = 'SUPER_ADMIN'`,
+      );
+    },
+  },
+
+  {
     name: 'claim_verifications.service_claim_id -> service_offer_claims FK',
     // `service_offer_claims` is created later in schema.sql than
     // `claim_verifications`, so on a fresh install this has to come after both.

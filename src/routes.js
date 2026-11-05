@@ -15,6 +15,12 @@ router.use('/shops', require('./modules/shops/shop.routes'));
 // a customer who holds neither yet. Keeping them apart is what stops the two
 // permission models being confused for one another (Onboarding §3, §15).
 router.use('/onboarding', require('./modules/onboarding/onboarding.routes'));
+// The reviewer's side of the same feature (Onboarding §14). Split from
+// `/onboarding` for the same reason `/redemptions` is split from `/claims`:
+// one router is reachable by a customer with no permissions at all, the other
+// is behind a global grant, and separate routers make that impossible to
+// confuse for one another.
+router.use('/seller-registrations', require('./modules/onboarding/review.routes'));
 router.use('/categories', require('./modules/categories/category.routes'));
 router.use('/offers', require('./modules/offers/offer.routes'));
 router.use('/favorites', require('./modules/favorites/favorite.routes'));

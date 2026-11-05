@@ -127,6 +127,49 @@ const claimSchema = z.object({
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
 
+// ---- Reviewer side (§14) --------------------------------------------------
+
+const { paginationSchema } = require('../../utils/pagination');
+const shopVerification = require('../../services/shopVerification');
+
+/** §14's filters. Every one is optional; no filter means the whole queue. */
+const reviewListQuery = z.object({
+  ...paginationSchema,
+  status: z.enum(shopVerification.STATUSES).optional(),
+  source: z.enum(['ADMIN_CREATED', 'SELF_REGISTERED', 'EXISTING_SHOP_CLAIM']).optional(),
+  /** The shop's public listing, which §11 keeps separate from verification. */
+  listingStatus: z.enum(['active', 'inactive']).optional(),
+  city: trimmed(120).optional(),
+  pincode: trimmed(20).optional(),
+  /** Shop name, contact number, or the owner's name or email. */
+  q: trimmed(160).optional(),
+});
+
+/**
+ * §14: a rejection or an information request carries a mandatory explanation.
+ *
+ * The minimum is 10 characters rather than 1 because the seller reads this
+ * verbatim (§12), and "no" is not something anyone can act on. The same floor
+ * is enforced again in `shopVerification.assertReason`, which is the gate -
+ * this one exists to fail at the edge with a field name attached.
+ */
+const reasonRequired = z.object({
+  reason: trimmed(1000).min(10, 'Say what is wrong and what the seller should do'),
+});
+
+const reasonOptional = z.object({
+  reason: trimmed(1000).optional().nullable().or(z.literal('')),
+});
+
+/** Approving may also put the shop live in the same decision (§11). */
+const approveSchema = z.object({
+  activate: z.coerce.boolean().optional().default(true),
+  reason: trimmed(1000).optional().nullable().or(z.literal('')),
+});
+
+/** Switching a shop's public listing on or off, verification untouched. */
+const listingSchema = z.object({ status: z.enum(['active', 'inactive']) });
+
 module.exports = {
   addressSchema,
   shopDetailsSchema,
@@ -137,4 +180,9 @@ module.exports = {
   duplicateQuery,
   claimSchema,
   idParam,
+  reviewListQuery,
+  reasonRequired,
+  reasonOptional,
+  approveSchema,
+  listingSchema,
 };

@@ -26,6 +26,21 @@ const PERMISSIONS = {
 
   MANAGE_CATEGORIES: { category: 'Catalogue', description: 'Manage offer categories' },
 
+  /**
+   * Self-Service Onboarding §14: who may decide a seller registration.
+   *
+   * A named permission rather than a hardcoded Super Admin check, so review
+   * can be delegated to a trusted operations account without a code change -
+   * which is the realistic end state, since approving shops is day-to-day
+   * work and Super Admin is not. Granted globally only: it is deliberately
+   * absent from the shop ADMIN role, because a merchant who held it through
+   * a shop membership could approve their own registration.
+   */
+  REVIEW_SELLER_REGISTRATIONS: {
+    category: 'Shops',
+    description: 'Review, approve and reject self-service seller registrations',
+  },
+
   // Banner permissions are granted individually (§6). Holding the Admin role
   // is deliberately not enough - a Super Admin must grant each one.
   VIEW_BANNERS: { category: 'Banners', description: 'View featured banners' },
@@ -256,6 +271,7 @@ const MANAGEMENT_PERMISSIONS = [
   'USE_AI_ASSISTANT',
   'USE_AI_CONTENT',
   'MANAGE_SUBSCRIPTIONS',
+  'REVIEW_SELLER_REGISTRATIONS',
 ];
 
 const SUPER_ADMIN_ROLE = 'SUPER_ADMIN';
