@@ -9,6 +9,12 @@ router.use('/users', require('./modules/users/user.routes'));
 router.use('/roles', require('./modules/roles/role.routes'));
 router.use('/permissions', require('./modules/permissions/permission.routes'));
 router.use('/shops', require('./modules/shops/shop.routes'));
+// Self-service seller registration. A sibling of `/shops` rather than a child
+// of it on purpose: `/shops` is the admin-assisted flow and every write there
+// is behind CREATE_SHOP or EDIT_SHOP, while these routes must be reachable by
+// a customer who holds neither yet. Keeping them apart is what stops the two
+// permission models being confused for one another (Onboarding §3, §15).
+router.use('/onboarding', require('./modules/onboarding/onboarding.routes'));
 router.use('/categories', require('./modules/categories/category.routes'));
 router.use('/offers', require('./modules/offers/offer.routes'));
 router.use('/favorites', require('./modules/favorites/favorite.routes'));

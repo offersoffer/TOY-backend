@@ -148,4 +148,20 @@ const supportLimiter = rateLimit({
   message: message('You have raised several requests recently. Please wait a little before sending another.'),
 });
 
-module.exports = { apiLimiter, authLimiter, refreshLimiter, emailLimiter, searchLimiter, uploadLimiter, aiLimiter, claimVerifyLimiter, supportLimiter };
+/**
+ * Limiter for seller self-registration (Self-Service Onboarding §19).
+ *
+ * Keyed by account rather than IP: a shared office or a mobile carrier NAT
+ * puts many legitimate shopkeepers behind one address, and the thing worth
+ * limiting is one account creating shops in a loop, not one building.
+ * Generous enough that a merchant registering a second shop never notices.
+ */
+const onboardingLimiter = rateLimit({
+  ...base,
+  windowMs: 60 * 60 * 1000,
+  limit: 10,
+  keyGenerator: (req) => (req.user?.id ? `user:${req.user.id}` : req.ip),
+  message: message('Too many registration attempts. Please try again later.'),
+});
+
+module.exports = { apiLimiter, onboardingLimiter, authLimiter, refreshLimiter, emailLimiter, searchLimiter, uploadLimiter, aiLimiter, claimVerifyLimiter, supportLimiter };
