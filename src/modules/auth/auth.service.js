@@ -53,6 +53,13 @@ function publicUser(user, context) {
       designation: shop.designation,
       roleName: shop.roleName,
       permissions: shop.permissions,
+      /**
+       * Where this shop sits in review, or null for one that never went
+       * through it (§15). The clients use it to tell a registration in flight
+       * from a shop to run, and to link to the right screen for each.
+       */
+      verificationStatus: shop.verificationStatus,
+      awaitingFirstApproval: shop.awaitingFirstApproval,
     })),
   };
 }

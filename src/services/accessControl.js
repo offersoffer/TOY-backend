@@ -2,6 +2,7 @@
 
 const { query } = require('../db/pool');
 const { SUPER_ADMIN_ROLE, MANAGEMENT_PERMISSIONS } = require('../config/permissions');
+const shopVerification = require('./shopVerification');
 
 /**
  * Resolves everything the authorization layer needs about a user:
@@ -43,6 +44,7 @@ async function loadAccessContext(userId) {
               s.name           AS shop_name,
               s.slug           AS shop_slug,
               s.logo_url       AS shop_logo_url,
+              s.verification_status,
               r.id             AS role_id,
               r.name           AS role_name,
               GROUP_CONCAT(DISTINCT p.name) AS permissions
@@ -62,7 +64,7 @@ async function loadAccessContext(userId) {
         WHERE sm.user_id = ? AND sm.status = 'active'
           AND (s.status = 'active' OR s.verification_status IS NOT NULL)
         GROUP BY sm.id, sm.shop_id, sm.branch_id, sm.designation, sm.status,
-                 s.name, s.slug, s.logo_url, r.id, r.name`,
+                 s.name, s.slug, s.logo_url, s.verification_status, r.id, r.name`,
       [userId],
     ),
   ]);
@@ -94,6 +96,9 @@ async function loadAccessContext(userId) {
     shopSlug: row.shop_slug,
     shopLogoUrl: row.shop_logo_url,
     designation: row.designation,
+    verificationStatus: row.verification_status ?? null,
+    /** Still waiting on its first approval, so not yet a shop to run (§12). */
+    awaitingFirstApproval: shopVerification.isAwaitingFirstApproval(row.verification_status),
     roleId: row.role_id === null ? null : Number(row.role_id),
     roleName: row.role_name,
     permissions: [
@@ -112,6 +117,21 @@ async function loadAccessContext(userId) {
     ...new Set([...globalSet, ...shops.flatMap((shop) => shop.permissions)]),
   ];
 
+  /**
+   * The same union, minus shops still waiting on their first approval.
+   *
+   * Only `canAccessAdmin` reads this, and only to decide which experience the
+   * user is shown. Authorization is untouched: the seller keeps every
+   * permission on their own registration, which is what lets them edit and
+   * submit it, and `hasShopPermission` still answers per shop.
+   */
+  const administeredPermissions = [
+    ...new Set([
+      ...globalSet,
+      ...shops.filter((shop) => !shop.awaitingFirstApproval).flatMap((shop) => shop.permissions),
+    ]),
+  ];
+
   return {
     roles: roles.map((role) => ({
       id: Number(role.id),
@@ -127,9 +147,17 @@ async function loadAccessContext(userId) {
     unassignedShopRoles,
     /** Union of global + every shop-scoped permission; used for UI hints only. */
     effectivePermissions,
-    /** True when the user administers anything at all. */
+    /**
+     * True when the user administers anything at all.
+     *
+     * A seller whose only shop is an unreviewed registration is not an
+     * administrator yet (§12). Mobile reads this to choose between the
+     * customer app and the merchant app, so getting it wrong would drop
+     * someone mid-registration into a Shop Admin app where every action
+     * refuses - and, on mobile, with no way back to the customer tabs.
+     */
     canAccessAdmin:
-      isSuperAdmin || effectivePermissions.some((name) => MANAGEMENT_PERMISSIONS.includes(name)),
+      isSuperAdmin || administeredPermissions.some((name) => MANAGEMENT_PERMISSIONS.includes(name)),
   };
 }
 

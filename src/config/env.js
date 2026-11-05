@@ -66,6 +66,15 @@ const env = {
   publicApiUrl: (process.env.PUBLIC_API_URL || 'http://localhost:3000').replace(/\/$/, ''),
   appUrl: (process.env.APP_URL || 'http://localhost:4200').replace(/\/$/, ''),
   /**
+   * The time zone a merchant's calendar day is measured in.
+   *
+   * DATETIME columns hold UTC (see `db/pool.js`), which is right for an
+   * instant and says nothing about which instants bound "5 November". Every
+   * merchant on the platform is Indian, so a bare date on an API request means
+   * an Indian day - `utils/businessDate.js` is what turns one into the other.
+   */
+  businessTimeZone: process.env.BUSINESS_TIMEZONE || 'Asia/Kolkata',
+  /**
    * Custom scheme the mobile app registers (`app.json` -> expo.scheme). Every
    * notification stores a deep link built from this, so tapping one opens the
    * screen it names instead of wherever the app was last (Push §26, §27).

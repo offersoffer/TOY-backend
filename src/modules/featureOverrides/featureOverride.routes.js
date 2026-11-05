@@ -5,6 +5,7 @@ const { z } = require('zod');
 const service = require('./featureOverride.service');
 const catalogue = require('../../config/featureCatalogue');
 const audit = require('../../utils/audit');
+const { businessDate } = require('../../utils/businessDate');
 const validate = require('../../middleware/validate');
 const asyncHandler = require('../../utils/asyncHandler');
 const { authenticate } = require('../../middleware/auth');
@@ -37,8 +38,10 @@ const grantBody = z
       .trim()
       .refine((key) => catalogue.isGrantable(key), 'Unknown feature'),
     adminUserId: z.coerce.number().int().positive().optional(),
-    startsAt: z.coerce.date().optional(),
-    expiresAt: z.coerce.date().optional(),
+    // A bare date names a day, and an override that "expires on the 5th"
+    // should last that whole day - see utils/businessDate.js.
+    startsAt: businessDate('start').optional(),
+    expiresAt: businessDate('end').optional(),
     isPermanent: z.boolean().optional().default(false),
     reason: z.string().trim().max(500).optional(),
   })

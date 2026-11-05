@@ -1,6 +1,7 @@
 'use strict';
 
 const { z } = require('zod');
+const { businessDate } = require('../../utils/businessDate');
 const { paginationSchema } = require('../../utils/pagination');
 const { AI_FEATURE_NAMES, CONTENT_SECTIONS } = require('../../config/aiFeatures');
 
@@ -42,8 +43,8 @@ const recommendSchema = z.object({
   preferredDiscount: optionalText(120),
   targetCustomer: optionalText(200),
   locationRadiusKm: z.coerce.number().min(0).max(500).optional().nullable(),
-  startDate: z.coerce.date().optional().nullable(),
-  endDate: z.coerce.date().optional().nullable(),
+  startDate: businessDate('start').optional().nullable(),
+  endDate: businessDate('end').optional().nullable(),
   budget: optionalText(120),
   inventoryNotes: optionalText(1000),
   additionalInstructions: optionalText(1000),
@@ -74,8 +75,8 @@ const offerFactsSchema = z.object({
   buyQuantity: z.coerce.number().int().min(1).max(999).optional().nullable(),
   getQuantity: z.coerce.number().int().min(1).max(999).optional().nullable(),
   minPurchase: z.coerce.number().min(0).max(99999999).optional().nullable(),
-  startDate: z.coerce.date().optional().nullable(),
-  endDate: z.coerce.date().optional().nullable(),
+  startDate: businessDate('start').optional().nullable(),
+  endDate: businessDate('end').optional().nullable(),
   termsConditions: optionalText(2000),
   eligibility: optionalText(1000),
   usageRestrictions: optionalText(1000),

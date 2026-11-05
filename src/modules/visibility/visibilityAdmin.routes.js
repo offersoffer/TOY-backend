@@ -2,6 +2,7 @@
 
 const express = require('express');
 const { z } = require('zod');
+const { businessDate } = require('../../utils/businessDate');
 const { query, queryOne, execute, rawQuery } = require('../../db/pool');
 const ApiError = require('../../utils/ApiError');
 const validate = require('../../middleware/validate');
@@ -402,7 +403,8 @@ const exclusionBody = z
     listingId: z.coerce.number().int().positive().optional(),
     shopId: z.coerce.number().int().positive().optional(),
     reason: z.string().trim().min(3).max(255),
-    expiresAt: z.coerce.date().optional().nullable(),
+    // An exclusion lifted "on the 5th" runs to the end of the 5th.
+    expiresAt: businessDate('end').optional().nullable(),
   })
   .refine((data) => (data.scope === 'listing' ? data.listingType && data.listingId : Boolean(data.shopId)), {
     message: 'A listing exclusion needs listingType and listingId; a shop exclusion needs shopId',
@@ -569,8 +571,8 @@ const grantBody = z.object({
   level: z.enum(['BASIC', 'ENHANCED', 'PRIORITY']),
   reason: z.string().trim().max(255).optional(),
   featuredAccess: z.boolean().default(false),
-  startsAt: z.coerce.date().optional(),
-  expiresAt: z.coerce.date().optional().nullable(),
+  startsAt: businessDate('start').optional(),
+  expiresAt: businessDate('end').optional().nullable(),
 });
 
 /**

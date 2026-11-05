@@ -2,6 +2,7 @@
 
 const { query, queryOne, execute, rawQuery } = require('../../db/pool');
 const ApiError = require('../../utils/ApiError');
+const { parseBusinessDate } = require('../../utils/businessDate');
 const { limitOffset } = require('../../utils/pagination');
 const access = require('../../services/accessControl');
 const subscriptions = require('../../services/subscriptions');
@@ -338,18 +339,18 @@ async function recommend(payload, user, { regenerate = false } = {}) {
  * edits and submits themselves (§9, §10).
  */
 function toOfferPrefill(recommendation, shopId, payload) {
-  const start = recommendation.recommendedStartDate
-    ? new Date(recommendation.recommendedStartDate)
-    : payload.startDate
-      ? new Date(payload.startDate)
-      : new Date();
+  // The model answers with bare calendar days, and `new Date('2026-09-20')`
+  // reads one as UTC midnight - 05:30 in the merchant's morning. A suggested
+  // window should start when their day starts and run to the end of the last
+  // one, so both edges are resolved in the business time zone.
+  const start = parseBusinessDate(recommendation.recommendedStartDate, 'start')
+    ?? parseBusinessDate(payload.startDate, 'start')
+    ?? new Date();
 
   const durationDays = recommendation.recommendedDurationDays ?? 7;
-  const end = recommendation.recommendedEndDate
-    ? new Date(recommendation.recommendedEndDate)
-    : payload.endDate
-      ? new Date(payload.endDate)
-      : new Date(start.getTime() + durationDays * 86400000);
+  const end = parseBusinessDate(recommendation.recommendedEndDate, 'end')
+    ?? parseBusinessDate(payload.endDate, 'end')
+    ?? new Date(start.getTime() + durationDays * 86400000);
 
   const valid = (date, fallback) =>
     Number.isFinite(date?.getTime?.()) ? date.toISOString() : fallback.toISOString();

@@ -56,6 +56,28 @@ const TRANSITIONS = {
   [SUSPENDED]: [VERIFIED],
 };
 
+/**
+ * States a shop has never been approved out of.
+ *
+ * The difference between "a seller with a registration in flight" and "a
+ * merchant". Both hold ADMIN on their shop from the moment the draft exists -
+ * that is what lets them edit and submit it - but §12 is explicit that a
+ * pending seller cannot yet run a shop: no offers, no staff, nothing public.
+ * Giving them the merchant experience would be a screen full of actions that
+ * all refuse.
+ *
+ * VERIFIED and SUSPENDED are deliberately absent. Both were approved once, so
+ * the shop is a real shop; a suspended merchant still needs the admin screens
+ * to read why and to put it right. NULL is absent for the reason given above:
+ * it is every shop that predates review (§15).
+ */
+const NEVER_APPROVED = new Set([DRAFT, PENDING_VERIFICATION, ADDITIONAL_INFO_REQUIRED, REJECTED]);
+
+/** True for a shop still waiting on its first approval. NULL is not. */
+function isAwaitingFirstApproval(verificationStatus) {
+  return NEVER_APPROVED.has(verificationStatus);
+}
+
 /** Decisions only an authorised reviewer may make (§14). */
 const REVIEWER_ONLY = new Set([VERIFIED, REJECTED, ADDITIONAL_INFO_REQUIRED, SUSPENDED]);
 
@@ -150,6 +172,8 @@ module.exports = {
   SUSPENDED,
   STATUSES,
   TRANSITIONS,
+  NEVER_APPROVED,
+  isAwaitingFirstApproval,
   blocksActivation,
   assertMayActivate,
   assertTransition,
