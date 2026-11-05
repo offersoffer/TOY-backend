@@ -201,6 +201,13 @@ CREATE TABLE IF NOT EXISTS shops (
   -- Mandatory for REJECTED and ADDITIONAL_INFO_REQUIRED (§14), and shown to
   -- the seller verbatim, so it is their explanation rather than an admin note.
   verification_reason       TEXT         DEFAULT NULL,
+  -- §8's text evidence: GSTIN, a Google Business link, a registration number.
+  -- JSON because §8 is explicit that none of it is universally required and
+  -- an admin may ask for something nobody anticipated - a column per field
+  -- would make each new question a migration. Follows `social_links` and
+  -- `opening_hours`, which are stored the same way for the same reason.
+  -- Private: never included in any public shop response (§8, §19).
+  verification_details JSON              DEFAULT NULL,
   created_by     BIGINT UNSIGNED         DEFAULT NULL,
   updated_by     BIGINT UNSIGNED         DEFAULT NULL,
   created_at     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,

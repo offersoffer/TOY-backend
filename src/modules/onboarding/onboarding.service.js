@@ -66,6 +66,17 @@ async function loadOwnedRegistration(shopId, user) {
   return shop;
 }
 
+/** MySQL hands JSON back parsed on some drivers and as text on others. */
+function parseDetails(value) {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
+}
+
 /** The shape every seller-facing endpoint returns, so the wizard has one contract. */
 async function present(shop) {
   const branch = await queryOne(
@@ -96,6 +107,10 @@ async function present(shop) {
     decisionReason: shop.verification_reason,
     // §11: what they may and may not do right now, decided by the backend so
     // the clients never have to work it out and never disagree with it.
+    // §8: only ever returned to the merchant themselves or a reviewer, both
+    // of which is what `loadOwnedRegistration` has already established. It is
+    // never part of a public shop response.
+    verification: parseDetails(shop.verification_details),
     canEdit: EDITABLE.has(shop.verification_status),
     canSubmit: SUBMITTABLE.has(shop.verification_status),
     isPublic: shop.status === 'active' && shop.verification_status === shopVerification.VERIFIED,
@@ -255,6 +270,17 @@ async function update(shopId, payload, user) {
     },
     user,
   );
+
+  if (payload.verification !== undefined) {
+    // Merged rather than replaced: the wizard saves one step at a time, and
+    // a seller editing only the GSTIN must not blank the Google link they
+    // entered on the same screen a minute earlier.
+    const merged = { ...parseDetails(shop.verification_details), ...payload.verification };
+    await execute('UPDATE shops SET verification_details = ? WHERE id = ?', [
+      JSON.stringify(merged),
+      shopId,
+    ]);
+  }
 
   return present(await queryOne('SELECT * FROM shops WHERE id = ?', [shopId]));
 }

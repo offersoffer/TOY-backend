@@ -403,6 +403,12 @@ const COLUMN_PATCHES = [
     sql: `ALTER TABLE shops ADD COLUMN verification_reason TEXT
             DEFAULT NULL AFTER verification_reviewer_id`,
   },
+  {
+    table: 'shops',
+    column: 'verification_details',
+    sql: `ALTER TABLE shops ADD COLUMN verification_details JSON
+            DEFAULT NULL AFTER verification_reason`,
+  },
 ];
 
 /**

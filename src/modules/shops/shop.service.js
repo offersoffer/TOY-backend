@@ -650,7 +650,20 @@ async function create(payload, user, options = {}) {
     return newId;
   });
 
-  return getById(shopId, user);
+  /**
+   * The caller's access context was loaded when the request began, which was
+   * before this shop existed - so `user.shopIds` does not contain it, and
+   * `getById` would refuse to show an inactive shop to someone it believes is
+   * not a member. The membership was written in the transaction above, so
+   * adding the id here states something already true rather than granting
+   * anything: it only affects this read-back, and the next request loads the
+   * real context from the database.
+   */
+  const reader = grantAdminTo
+    ? { ...user, shopIds: [...(user.shopIds ?? []), shopId] }
+    : user;
+
+  return getById(shopId, reader);
 }
 
 /**

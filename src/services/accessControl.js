@@ -51,7 +51,16 @@ async function loadAccessContext(userId) {
          LEFT JOIN roles r ON r.id = sm.role_id AND r.status = 'active'
          LEFT JOIN role_permissions rp ON rp.role_id = r.id
          LEFT JOIN permissions p ON p.id = rp.permission_id
-        WHERE sm.user_id = ? AND sm.status = 'active' AND s.status = 'active'
+        -- The s.status check is what makes deactivating a shop remove its
+        -- staff's access, and that stays. The exception is a shop inside the
+        -- seller-registration lifecycle (Onboarding §11, §12): a draft and a
+        -- shop awaiting review are both deliberately inactive, so without
+        -- this a seller would have no access to the registration they just
+        -- created - they could not see it, edit it, or submit it. A shop with
+        -- a NULL verification_status is outside that lifecycle and behaves
+        -- exactly as before.
+        WHERE sm.user_id = ? AND sm.status = 'active'
+          AND (s.status = 'active' OR s.verification_status IS NOT NULL)
         GROUP BY sm.id, sm.shop_id, sm.branch_id, sm.designation, sm.status,
                  s.name, s.slug, s.logo_url, r.id, r.name`,
       [userId],

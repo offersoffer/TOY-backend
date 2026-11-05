@@ -53,8 +53,22 @@ const shopDetailsSchema = z.object({
   name: trimmed(160).min(2, 'Enter your shop name'),
   description: trimmed(2000).min(10, 'Describe your shop in a sentence or two'),
   contactNumber: trimmed(30).regex(/^[+\d][\d\s-]{5,20}$/, 'Enter a valid contact number'),
-  email: z.string().trim().email('Enter a valid email').max(190).optional().or(z.literal('')),
-  websiteUrl: z.string().trim().url('Enter a valid website URL').max(500).optional().or(z.literal('')),
+  email: z
+    .string()
+    .trim()
+    .email('Enter a valid email')
+    .max(190)
+    .nullable()
+    .optional()
+    .or(z.literal('')),
+  websiteUrl: z
+    .string()
+    .trim()
+    .url('Enter a valid website URL')
+    .max(500)
+    .nullable()
+    .optional()
+    .or(z.literal('')),
   logoUrl: z.string().trim().url().max(500).optional().nullable(),
   socialLinks: z.record(z.string().trim().url().max(500)).optional().nullable(),
   categoryIds: z.array(z.coerce.number().int().positive()).min(1, 'Choose at least one category'),
@@ -75,17 +89,19 @@ const startSchema = shopDetailsSchema.extend({
 const updateSchema = z.object({
   ...shopDetailsSchema.partial().shape,
   address: addressSchema.partial().optional(),
+  verification: z.lazy(() => verificationSchema.partial()).optional(),
 });
 
 /** §8. All optional - §8 is explicit that not every small business has GST. */
 const verificationSchema = z.object({
   gstin: trimmed(20)
     .regex(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/, 'Enter a valid GSTIN')
+    .nullable()
     .optional()
     .or(z.literal('')),
-  googleBusinessUrl: z.string().trim().url('Enter a valid link').max(500).optional().or(z.literal('')),
-  businessRegistrationNumber: trimmed(60).optional().or(z.literal('')),
-  note: trimmed(1000).optional().or(z.literal('')),
+  googleBusinessUrl: z.string().trim().url('Enter a valid link').max(500).nullable().optional().or(z.literal('')),
+  businessRegistrationNumber: trimmed(60).nullable().optional().or(z.literal('')),
+  note: trimmed(1000).nullable().optional().or(z.literal('')),
 });
 
 /** §10: submission needs the terms accepted, and says so rather than implying it. */
