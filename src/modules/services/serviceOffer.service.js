@@ -1,5 +1,6 @@
 'use strict';
 
+const shopVerification = require('../../services/shopVerification');
 const { query, queryOne, execute, rawQuery } = require('../../db/pool');
 const ApiError = require('../../utils/ApiError');
 const { limitOffset } = require('../../utils/pagination');
@@ -97,9 +98,16 @@ function resolveStatus(requested, startDate, endDate) {
   return 'active';
 }
 
-async function create(serviceId, payload) {
+async function create(serviceId, payload, user) {
   const service = await assertServiceExists(serviceId);
   const status = resolveStatus(payload.status, payload.startDate, payload.endDate);
+
+  // Onboarding §12, the same gate as offers and services: a shop in review
+  // may prepare a draft offer on a service, but not publish one.
+  if (status !== 'draft') {
+    const shop = await queryOne('SELECT verification_status FROM shops WHERE id = ?', [service.shop_id]);
+    shopVerification.assertMayPublishListing(shop?.verification_status, user, 'offer');
+  }
 
   const result = await execute(
     `INSERT INTO service_offers (

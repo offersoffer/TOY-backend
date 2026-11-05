@@ -146,3 +146,45 @@ test('rejection and information requests require a usable reason', () => {
 test('approval needs no reason', () => {
   assert.doesNotThrow(() => v.assertReason(v.VERIFIED, undefined));
 });
+
+// ---- what a shop in review may publish ------------------------------------
+
+test('a shop in review may not publish a listing', () => {
+  // §12 tells the seller they may "prepare offer and service drafts" but not
+  // "publish public offers/services". Before this guard the API said
+  // otherwise: an offer created while the shop was pending was stored
+  // `active`, and would have appeared the instant the shop was approved.
+  for (const status of [v.DRAFT, v.PENDING_VERIFICATION, v.ADDITIONAL_INFO_REQUIRED,
+                        v.REJECTED, v.SUSPENDED]) {
+    assert.throws(
+      () => v.assertMayPublishListing(status, SELLER, 'offer'),
+      (error) => error.status === 403 && /draft/i.test(error.message),
+      `${status} should refuse a published offer`,
+    );
+  }
+});
+
+test('the refusal tells the seller what to do instead', () => {
+  // A seller who is only told "forbidden" opens a support ticket; one who is
+  // told to save a draft gets on with it.
+  try {
+    v.assertMayPublishListing(v.PENDING_VERIFICATION, SELLER, 'service');
+    assert.fail('should have thrown');
+  } catch (error) {
+    assert.match(error.message, /waiting for verification/i);
+    assert.match(error.message, /Save the service as a draft/);
+  }
+});
+
+test('an approved shop publishes freely, and so does a pre-existing one', () => {
+  assert.doesNotThrow(() => v.assertMayPublishListing(v.VERIFIED, SELLER, 'offer'));
+  // NULL is every shop that predates the feature (§15). Blocking those would
+  // stop the entire existing marketplace posting offers.
+  assert.doesNotThrow(() => v.assertMayPublishListing(null, SELLER, 'offer'));
+  assert.doesNotThrow(() => v.assertMayPublishListing(undefined, SELLER, 'offer'));
+});
+
+test('a reviewer is not blocked by the publish gate', () => {
+  // Somebody has to be able to put things right on a suspended shop.
+  assert.doesNotThrow(() => v.assertMayPublishListing(v.SUSPENDED, SUPER, 'offer'));
+});

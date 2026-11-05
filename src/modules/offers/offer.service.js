@@ -7,6 +7,7 @@ const geo = require('../../utils/geo');
 const { limitOffset } = require('../../utils/pagination');
 const accessControl = require('../../services/accessControl');
 const entitlements = require('../../services/entitlements');
+const shopVerification = require('../../services/shopVerification');
 const analyticsEvents = require('../../services/analyticsEvents');
 const visibilityEvents = require('../../services/visibility/visibilityAnalytics.service');
 const subscriptions = require('../subscriptions/subscription.service');
@@ -594,12 +595,23 @@ async function assertPublishingAllowed(shopId, payload, { isNew }) {
 }
 
 async function create(payload, user) {
-  const shop = await queryOne('SELECT id, name, status FROM shops WHERE id = ?', [payload.shopId]);
+  const shop = await queryOne(
+    'SELECT id, name, status, verification_status FROM shops WHERE id = ?',
+    [payload.shopId],
+  );
   if (!shop) throw ApiError.badRequest('Shop not found');
 
   const allowance = await assertPublishingAllowed(payload.shopId, payload, { isNew: true });
 
   const status = resolveStatus(payload.status, payload.startDate, payload.endDate);
+
+  // Onboarding §12: a shop still in review may prepare drafts but may not put
+  // anything in front of customers. Checked on the resolved status, not the
+  // requested one, because "scheduled" and "active" are both published as far
+  // as a seller waiting on approval is concerned.
+  if (status !== 'draft') {
+    shopVerification.assertMayPublishListing(shop.verification_status, user, 'offer');
+  }
 
   const offerId = await transaction(async (connection) => {
     // §24: the monthly allowance is re-checked here, under a lock, because the
@@ -722,6 +734,12 @@ async function update(offerId, payload, user, previous) {
   const keepStatus = ['deactivated', 'draft'].includes(previous.status)
     ? previous.status
     : resolveStatus(payload.status === 'draft' ? previous.status : payload.status, payload.startDate, payload.endDate);
+
+  // The same gate as create: editing must not be the way round it.
+  if (keepStatus !== 'draft' && previous.status === 'draft') {
+    const shop = await queryOne('SELECT verification_status FROM shops WHERE id = ?', [previous.shop_id]);
+    shopVerification.assertMayPublishListing(shop?.verification_status, user, 'offer');
+  }
 
   await transaction(async (connection) => {
     await assertBranchesBelongToShop(connection, previous.shop_id, payload.branchIds);

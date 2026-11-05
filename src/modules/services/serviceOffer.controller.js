@@ -15,7 +15,7 @@ exports.detail = async (req, res) => {
 };
 
 exports.create = async (req, res) => {
-  const record = await service.create(req.params.id, req.body);
+  const record = await service.create(req.params.id, req.body, req.user);
   await audit.record(req, {
     action: 'SERVICE_OFFER_CREATED',
     entityType: 'service_offer',

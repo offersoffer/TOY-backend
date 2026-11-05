@@ -142,6 +142,34 @@ function assertMayActivate(verificationStatus, user) {
 }
 
 /**
+ * May a shop in this verification state put a listing in front of customers?
+ *
+ * The same rule as activation, applied one level down. §12 tells a pending
+ * seller in so many words that they may "prepare offer and service drafts"
+ * but may not "publish public offers/services", and without this the API
+ * said otherwise: an offer created while the shop was pending was stored
+ * `active`.
+ *
+ * Nothing leaked, because every public query joins the shop's own status -
+ * but that is a guarantee held by each individual query rather than by the
+ * rule, and it fails open in the worst way. An unreviewed seller could stage
+ * a dozen active offers during review and every one of them would appear the
+ * instant their shop was approved, without anyone having looked at them.
+ *
+ * Drafts stay allowed, which is the whole point: the seller can get their
+ * shop ready while they wait.
+ */
+function assertMayPublishListing(verificationStatus, user, noun = 'listing') {
+  if (!blocksActivation(verificationStatus)) return;
+  if (mayReview(user)) return;
+
+  const why = ACTIVATION_REFUSAL[verificationStatus] ?? 'This shop cannot publish yet.';
+  throw ApiError.forbidden(
+    `${why} Save the ${noun} as a draft and it will be ready to publish once the shop is approved.`,
+  );
+}
+
+/**
  * Refuses an illegal move between verification states.
  *
  * `from` of null means a shop that never entered review; the only way in is to
@@ -197,6 +225,7 @@ module.exports = {
   isAwaitingFirstApproval,
   blocksActivation,
   assertMayActivate,
+  assertMayPublishListing,
   assertTransition,
   assertReason,
 };

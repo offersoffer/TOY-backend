@@ -7,6 +7,7 @@ const geo = require('../../utils/geo');
 const { limitOffset } = require('../../utils/pagination');
 const accessControl = require('../../services/accessControl');
 const entitlements = require('../../services/entitlements');
+const shopVerification = require('../../services/shopVerification');
 const analyticsEvents = require('../../services/analyticsEvents');
 const notifications = require('../../services/notifications');
 const { FEATURES } = require('../../config/plans');
@@ -547,12 +548,21 @@ async function insertImagesAndLocations(connection, serviceId, payload) {
 }
 
 async function create(payload, user) {
-  const shop = await queryOne('SELECT id, name, status FROM shops WHERE id = ?', [payload.shopId]);
+  const shop = await queryOne(
+    'SELECT id, name, status, verification_status FROM shops WHERE id = ?',
+    [payload.shopId],
+  );
   if (!shop) throw ApiError.badRequest('Shop not found');
 
   const allowance = await assertPublishingAllowed(payload.shopId, payload, { isNew: true });
 
   const status = resolveStatus(payload.status, payload.startDate ?? null, payload.endDate ?? null);
+
+  // Onboarding §12: the same rule as offers. A shop in review may prepare
+  // drafts; it may not put a service in front of customers.
+  if (status !== 'draft') {
+    shopVerification.assertMayPublishListing(shop.verification_status, user, 'service');
+  }
 
   const serviceId = await transaction(async (connection) => {
     // §24: re-checked under a lock, because the check above raced.
