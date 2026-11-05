@@ -343,6 +343,66 @@ const COLUMN_PATCHES = [
     ],
   },
 
+  // ---- Self-service seller onboarding -------------------------------------
+  //
+  // Six nullable additions to `shops`. Nullable is the whole point: §15 forbids
+  // backfilling existing shops as pending, so every shop that already exists
+  // keeps NULL in all of these and carries on behaving exactly as before.
+  {
+    table: 'shops',
+    column: 'registration_source',
+    sql: `ALTER TABLE shops ADD COLUMN registration_source
+            ENUM('ADMIN_CREATED','SELF_REGISTERED','EXISTING_SHOP_CLAIM')
+            DEFAULT NULL AFTER acquisition_channel`,
+    after: ['CREATE INDEX idx_shops_reg_source ON shops (registration_source)'],
+    // Deliberately no UPDATE stamping existing rows as ADMIN_CREATED. It would
+    // be a guess: these shops pre-date the column and nothing recorded how
+    // they arrived, and §3 says the value is for reporting - a fabricated one
+    // is worse than an honest NULL.
+  },
+  {
+    table: 'shops',
+    column: 'verification_status',
+    sql: `ALTER TABLE shops ADD COLUMN verification_status
+            ENUM('DRAFT','PENDING_VERIFICATION','ADDITIONAL_INFO_REQUIRED',
+                 'VERIFIED','REJECTED','SUSPENDED')
+            DEFAULT NULL AFTER registration_source`,
+  },
+  {
+    table: 'shops',
+    column: 'verification_submitted_at',
+    sql: `ALTER TABLE shops ADD COLUMN verification_submitted_at DATETIME
+            DEFAULT NULL AFTER verification_status`,
+    // The review-queue index spans both columns, so it is created here rather
+    // than with `verification_status`: patches run in array order, and at that
+    // point this column does not exist yet.
+    after: [
+      `CREATE INDEX idx_shops_verification
+         ON shops (verification_status, verification_submitted_at)`,
+    ],
+  },
+  {
+    table: 'shops',
+    column: 'verification_decided_at',
+    sql: `ALTER TABLE shops ADD COLUMN verification_decided_at DATETIME
+            DEFAULT NULL AFTER verification_submitted_at`,
+  },
+  {
+    table: 'shops',
+    column: 'verification_reviewer_id',
+    sql: `ALTER TABLE shops ADD COLUMN verification_reviewer_id BIGINT UNSIGNED
+            DEFAULT NULL AFTER verification_decided_at`,
+    after: [
+      `ALTER TABLE shops ADD CONSTRAINT fk_shops_reviewer
+         FOREIGN KEY (verification_reviewer_id) REFERENCES users (id) ON DELETE SET NULL`,
+    ],
+  },
+  {
+    table: 'shops',
+    column: 'verification_reason',
+    sql: `ALTER TABLE shops ADD COLUMN verification_reason TEXT
+            DEFAULT NULL AFTER verification_reviewer_id`,
+  },
 ];
 
 /**

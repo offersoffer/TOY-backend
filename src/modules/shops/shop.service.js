@@ -7,6 +7,7 @@ const { uniqueSlug } = require('../../utils/slug');
 const { limitOffset } = require('../../utils/pagination');
 const accessControl = require('../../services/accessControl');
 const entitlements = require('../../services/entitlements');
+const shopVerification = require('../../services/shopVerification');
 const geocoding = require('../../services/geocoding');
 const shopProfile = require('./shopProfile');
 const { PLANS, minimumPlanForLimit } = require('../../config/plans');
@@ -508,7 +509,34 @@ function assertPublishable(shop, branch) {
   );
 }
 
-async function create(payload, user) {
+/**
+ * Creates a shop.
+ *
+ * `options` is how self-service onboarding reuses this rather than growing a
+ * parallel insert that would drift from it (Self-Service Onboarding §3, §22):
+ *
+ *   registrationSource  which code path made the row. Defaults to
+ *                       ADMIN_CREATED, so the existing admin flow records
+ *                       itself correctly with no change at its call sites
+ *                       (§15). Reporting only - nothing may branch on it for
+ *                       authorization (§3).
+ *   verificationStatus  DRAFT for a self-registration, null for admin-created,
+ *                       because an admin creating a shop by hand *is* the
+ *                       verification and §15 forbids making those pending.
+ *   grantAdminTo        user id to make ADMIN of this shop, in the same
+ *                       transaction. Self-service needs it: the seller has no
+ *                       CREATE_SHOP permission and no membership until this
+ *                       row exists, so creating the shop and granting access
+ *                       have to succeed or fail together or a seller ends up
+ *                       locked out of a shop only they were meant to manage.
+ */
+async function create(payload, user, options = {}) {
+  const {
+    registrationSource = 'ADMIN_CREATED',
+    verificationStatus = null,
+    grantAdminTo = null,
+  } = options;
+
   const slug = await uniqueSlug('shops', payload.name);
 
   // A new shop always starts on Free, so its category allowance is known before
@@ -554,8 +582,8 @@ async function create(payload, user) {
     const [result] = await connection.execute(
       `INSERT INTO shops (name, slug, description, logo_url, cover_url, contact_number, email,
                           website_url, social_links, opening_hours, status, acquisition_channel,
-                          created_by, updated_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                          registration_source, verification_status, created_by, updated_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         payload.name,
         slug,
@@ -569,11 +597,32 @@ async function create(payload, user) {
         payload.openingHours ? JSON.stringify(payload.openingHours) : null,
         payload.status ?? 'active',
         acquisitionChannel,
+        registrationSource,
+        verificationStatus,
         user.id,
         user.id,
       ],
     );
     const newId = result.insertId;
+
+    // §3: merchant access is granted by trusted backend logic and never from
+    // anything the client sent. The role is looked up by name rather than
+    // taken from the payload, so there is no request shape that turns this
+    // into "make me a Super Admin of my own shop".
+    if (grantAdminTo) {
+      const [[adminRole]] = await connection.query(
+        "SELECT id FROM roles WHERE name = 'ADMIN' AND scope = 'shop' LIMIT 1",
+      );
+      if (!adminRole) {
+        throw new Error('The shop-scoped ADMIN role is missing; run the seed before self-registration.');
+      }
+      await connection.execute(
+        `INSERT INTO shop_members (shop_id, user_id, role_id, status)
+         VALUES (?, ?, ?, 'active')
+         ON DUPLICATE KEY UPDATE role_id = VALUES(role_id), status = 'active'`,
+        [newId, grantAdminTo, adminRole.id],
+      );
+    }
 
     for (const categoryId of payload.categoryIds || []) {
       await connection.execute(
@@ -662,6 +711,20 @@ async function update(shopId, payload, user) {
   // published state is gated: deactivating an incomplete shop must stay
   // possible, or a merchant could neither fix it nor take it down.
   const nextStatus = payload.status ?? existing.status;
+
+  // Self-Service Onboarding §11, §27.12: a shop still in review cannot be
+  // switched on by its own merchant.
+  //
+  // This is the guard the whole feature rests on. A self-registered seller is
+  // made ADMIN of their shop the moment they create it, and ADMIN carries
+  // EDIT_SHOP - so without this line, PATCH /shops/:id {status:'active'} takes
+  // an unreviewed draft straight into public discovery, because every public
+  // query gates on `status` alone. Shops with a NULL verification_status are
+  // untouched, which is every shop that existed before this feature (§15).
+  if (nextStatus === 'active' && existing.status !== 'active') {
+    shopVerification.assertMayActivate(existing.verification_status, user);
+  }
+
   if (nextStatus === 'active') {
     const next = {
       name: payload.name ?? existing.name,

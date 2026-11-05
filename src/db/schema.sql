@@ -172,6 +172,35 @@ CREATE TABLE IF NOT EXISTS shops (
   -- any list we could fix here, and nothing branches on the value - it is only
   -- ever grouped by. NULL means nobody recorded it.
   acquisition_channel VARCHAR(60)        DEFAULT NULL,
+  -- Which code path created this shop (Self-Service Onboarding §3). Kept apart
+  -- from `acquisition_channel` on purpose: that one is sales attribution and
+  -- free text ("trade show, Chennai"), this one is a closed set describing how
+  -- the record came to exist, and reporting needs to ask the two questions
+  -- separately. §3 is explicit that it is for reporting and audit and must
+  -- never grant permission, so nothing may branch on it for authorization.
+  -- NULL means the shop pre-dates this column.
+  registration_source ENUM('ADMIN_CREATED','SELF_REGISTERED','EXISTING_SHOP_CLAIM')
+                                         DEFAULT NULL,
+  -- The review lifecycle (§11), deliberately NOT folded into `status`.
+  --
+  -- `status` is the operational question - is this shop live - and the whole
+  -- application already reads it, public discovery included. Widening that
+  -- enum would change the meaning of every existing query. This column answers
+  -- the separate question of where the shop is in review, which is why §11
+  -- insists VERIFIED and ACTIVE are not the same thing: a shop can pass review
+  -- and still be switched off.
+  --
+  -- NULL means "never went through review", which is every shop that existed
+  -- before this feature. §15 forbids backfilling those as pending, so NULL is
+  -- treated as approved-by-provenance and must stay the default.
+  verification_status ENUM('DRAFT','PENDING_VERIFICATION','ADDITIONAL_INFO_REQUIRED',
+                           'VERIFIED','REJECTED','SUSPENDED') DEFAULT NULL,
+  verification_submitted_at DATETIME     DEFAULT NULL,
+  verification_decided_at   DATETIME     DEFAULT NULL,
+  verification_reviewer_id  BIGINT UNSIGNED DEFAULT NULL,
+  -- Mandatory for REJECTED and ADDITIONAL_INFO_REQUIRED (§14), and shown to
+  -- the seller verbatim, so it is their explanation rather than an admin note.
+  verification_reason       TEXT         DEFAULT NULL,
   created_by     BIGINT UNSIGNED         DEFAULT NULL,
   updated_by     BIGINT UNSIGNED         DEFAULT NULL,
   created_at     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -181,6 +210,11 @@ CREATE TABLE IF NOT EXISTS shops (
   KEY idx_shops_channel (acquisition_channel),
   KEY idx_shops_status (status),
   KEY idx_shops_name (name),
+  -- The admin review queue (§14) filters on exactly this pair.
+  KEY idx_shops_verification (verification_status, verification_submitted_at),
+  KEY idx_shops_reg_source (registration_source),
+  CONSTRAINT fk_shops_reviewer FOREIGN KEY (verification_reviewer_id)
+    REFERENCES users (id) ON DELETE SET NULL,
   CONSTRAINT fk_shops_created_by FOREIGN KEY (created_by) REFERENCES users (id) ON DELETE SET NULL,
   CONSTRAINT fk_shops_updated_by FOREIGN KEY (updated_by) REFERENCES users (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -258,6 +292,72 @@ CREATE TABLE IF NOT EXISTS shop_members (
 -- ---------------------------------------------------------------------
 -- Offers
 -- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------
+-- Self-service seller onboarding (§8, §16)
+-- ---------------------------------------------------------------------
+
+-- Evidence a merchant offered to support their registration.
+--
+-- Stores a storage KEY, never a URL. §8 requires this material to be
+-- unreachable from public shop APIs, and `storage.put()` only writes to the
+-- public prefix and hands back a CloudFront URL - saving one of those here
+-- would publish a GST certificate at a guessable address. Downloads go
+-- through an authenticated route that resolves the key, so the only way to
+-- read a document is to be its merchant or a reviewer.
+CREATE TABLE IF NOT EXISTS shop_verification_documents (
+  id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  shop_id       BIGINT UNSIGNED NOT NULL,
+  -- Free text rather than an enum: §8 lets an admin ask for evidence nobody
+  -- anticipated, and a closed list would make that a migration.
+  kind          VARCHAR(60)     NOT NULL,
+  storage_key   VARCHAR(500)    NOT NULL,
+  original_name VARCHAR(255)            DEFAULT NULL,
+  content_type  VARCHAR(100)            DEFAULT NULL,
+  bytes         INT UNSIGNED            DEFAULT NULL,
+  uploaded_by   BIGINT UNSIGNED         DEFAULT NULL,
+  created_at    DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_svd_shop (shop_id, created_at),
+  CONSTRAINT fk_svd_shop FOREIGN KEY (shop_id) REFERENCES shops (id) ON DELETE CASCADE,
+  CONSTRAINT fk_svd_user FOREIGN KEY (uploaded_by) REFERENCES users (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- "This shop is mine, please give me access" (§16).
+--
+-- Deliberately separate from `shop_members`: a claim is a request about a
+-- membership that does not exist yet, and §16 is explicit that it must grant
+-- nothing until approved. Writing a pending row into shop_members - even an
+-- inactive one - would put the answer in the table the authorization checks
+-- read, which is exactly the mistake that turns a request into a back door.
+CREATE TABLE IF NOT EXISTS shop_claim_requests (
+  id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  shop_id       BIGINT UNSIGNED NOT NULL,
+  requester_id  BIGINT UNSIGNED NOT NULL,
+  -- Why they say the shop is theirs, and whatever they offered to show it.
+  reason        TEXT            NOT NULL,
+  contact_phone VARCHAR(30)             DEFAULT NULL,
+  status        ENUM('PENDING','APPROVED','REJECTED','WITHDRAWN')
+                                NOT NULL DEFAULT 'PENDING',
+  reviewer_id   BIGINT UNSIGNED         DEFAULT NULL,
+  -- Mandatory on rejection (§14) and shown to the requester.
+  decision_reason TEXT                  DEFAULT NULL,
+  decided_at    DATETIME                DEFAULT NULL,
+  created_at    DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  -- One live claim per person per shop. A second request while the first is
+  -- undecided is a retry, not a new claim, and this is what makes the submit
+  -- endpoint idempotent under a double-tap (§19). Decided rows drop out of the
+  -- index because `status` is part of it, so a rejected claimant may try again
+  -- with better evidence.
+  UNIQUE KEY uq_claim_open (shop_id, requester_id, status),
+  KEY idx_claim_queue (status, created_at),
+  KEY idx_claim_requester (requester_id),
+  CONSTRAINT fk_claim_req_shop FOREIGN KEY (shop_id) REFERENCES shops (id) ON DELETE CASCADE,
+  CONSTRAINT fk_claim_req_user FOREIGN KEY (requester_id) REFERENCES users (id) ON DELETE CASCADE,
+  CONSTRAINT fk_claim_req_reviewer FOREIGN KEY (reviewer_id) REFERENCES users (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS offers (
   id                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   shop_id           BIGINT UNSIGNED NOT NULL,
