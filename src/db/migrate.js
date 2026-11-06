@@ -449,6 +449,37 @@ const STATEMENT_PATCHES = [
             REFERENCES campaigns (id) ON DELETE SET NULL`,
   },
   {
+    name: 'shop_claim_requests.uq_claim_open covers live claims only',
+    /*
+      The index shipped keyed on (shop_id, requester_id, status), with a
+      comment claiming decided rows fell out of it. They do not - MySQL
+      exempts only NULLs from a UNIQUE key, and `status` is never NULL - so a
+      claimant was capped at one WITHDRAWN and one REJECTED row per shop for
+      life. Withdrawing a second request, or a reviewer rejecting a second
+      attempt, failed on a duplicate key.
+
+      `claim_open` is NULL unless the claim is PENDING, which confines the key
+      to live claims and leaves any number of decided ones. Rewritten in one
+      ALTER so the table is never briefly unconstrained, and generated from
+      `status` rather than `shop_id` because a STORED column may not derive
+      from a column an FK references with a referential action.
+    */
+    check: async (connection, dbName) => {
+      const [rows] = await connection.query(
+        `SELECT 1 FROM information_schema.STATISTICS
+          WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'shop_claim_requests'
+            AND INDEX_NAME = 'uq_claim_open' AND COLUMN_NAME = 'status' LIMIT 1`,
+        [dbName],
+      );
+      return rows.length > 0;
+    },
+    sql: `ALTER TABLE shop_claim_requests
+            DROP INDEX uq_claim_open,
+            ADD COLUMN claim_open TINYINT UNSIGNED
+              AS (IF(status = 'PENDING', 1, NULL)) STORED,
+            ADD UNIQUE KEY uq_claim_open (shop_id, requester_id, claim_open)`,
+  },
+  {
     name: 'every shop has a subscription row',
     // Entitlement checks assume the row exists; back-fill Free for shops that
     // pre-date V3 so nothing has to special-case a missing subscription.

@@ -351,13 +351,26 @@ CREATE TABLE IF NOT EXISTS shop_claim_requests (
   decided_at    DATETIME                DEFAULT NULL,
   created_at    DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at    DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  -- 1 while the claim is live, NULL once it is decided. The only reason this
+  -- exists is the unique key below; MySQL exempts NULLs from a UNIQUE index
+  -- and has no partial indexes to say so directly.
+  --
+  -- Generated from `status` rather than from `shop_id`, which would read more
+  -- naturally: a STORED column may not be derived from a column that an FK
+  -- references with a referential action, and `fk_claim_req_shop` is ON
+  -- DELETE CASCADE.
+  claim_open    TINYINT UNSIGNED AS (IF(status = 'PENDING', 1, NULL)) STORED,
   PRIMARY KEY (id),
   -- One live claim per person per shop. A second request while the first is
   -- undecided is a retry, not a new claim, and this is what makes the submit
-  -- endpoint idempotent under a double-tap (§19). Decided rows drop out of the
-  -- index because `status` is part of it, so a rejected claimant may try again
-  -- with better evidence.
-  UNIQUE KEY uq_claim_open (shop_id, requester_id, status),
+  -- endpoint idempotent under a double-tap (§19).
+  --
+  -- `claim_open` rather than `status` as the third column. With `status` the
+  -- key also held decided rows unique, which capped a claimant at one
+  -- WITHDRAWN and one REJECTED row per shop for life - withdrawing a second
+  -- request, or a reviewer rejecting a second attempt, died on a duplicate
+  -- key. Still leads with shop_id, so both foreign keys below use it.
+  UNIQUE KEY uq_claim_open (shop_id, requester_id, claim_open),
   KEY idx_claim_queue (status, created_at),
   KEY idx_claim_requester (requester_id),
   CONSTRAINT fk_claim_req_shop FOREIGN KEY (shop_id) REFERENCES shops (id) ON DELETE CASCADE,

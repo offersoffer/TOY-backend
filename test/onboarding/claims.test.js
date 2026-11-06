@@ -289,3 +289,53 @@ test('only an undecided claim can be withdrawn', async () => {
     (error) => error.status === 409,
   );
 });
+
+// ---- the index that decides how often a claim may be re-tried -------------
+
+/**
+ * The stubs above cannot reach this, so it is asserted against the DDL.
+ *
+ * "One live claim per person per shop" is enforced by a unique key, not by
+ * JavaScript - `createClaim` reads an open claim and returns it, which closes
+ * the ordinary double-tap but not two concurrent requests. The key shipped as
+ * (shop_id, requester_id, status), which also held *decided* rows unique:
+ * MySQL exempts only NULLs from a UNIQUE index and `status` is never NULL, so
+ * a claimant was capped at one WITHDRAWN and one REJECTED row per shop for
+ * life. Withdrawing a second request, and a reviewer rejecting a second
+ * attempt, both died on a duplicate key.
+ */
+test('§16: the unique key constrains live claims only', () => {
+  const fs = require('node:fs');
+  const ddl = fs.readFileSync(path.join(SRC, 'db/schema.sql'), 'utf8');
+  // Comments stripped first: prose in this table contains a semicolon, so
+  // splitting the raw text on one lands in the middle of the definition.
+  const table = ddl
+    .slice(ddl.indexOf('CREATE TABLE IF NOT EXISTS shop_claim_requests'))
+    .replace(/--[^\n]*/g, '');
+  const body = table.slice(0, table.indexOf(';'));
+
+  const key = body.match(/UNIQUE KEY uq_claim_open \(([^)]*)\)/);
+  assert.ok(key, 'uq_claim_open is missing');
+  const columns = key[1].split(',').map((c) => c.trim());
+
+  assert.deepEqual(
+    columns,
+    ['shop_id', 'requester_id', 'claim_open'],
+    'the key must discriminate on claim_open, never on status',
+  );
+  assert.match(
+    body,
+    /claim_open\s+TINYINT UNSIGNED AS \(IF\(status = 'PENDING', 1, NULL\)\) STORED/,
+    'claim_open must be NULL for every decided claim, or the key still binds them',
+  );
+  // Both foreign keys borrow this index, so shop_id has to stay leftmost.
+  assert.equal(columns[0], 'shop_id');
+});
+
+test('§16: an existing database is patched to the corrected key', () => {
+  const fs = require('node:fs');
+  const migrate = fs.readFileSync(path.join(SRC, 'db/migrate.js'), 'utf8');
+  assert.match(migrate, /uq_claim_open covers live claims only/);
+  // Keyed off the old shape, so the patch runs exactly once.
+  assert.match(migrate, /INDEX_NAME = 'uq_claim_open' AND COLUMN_NAME = 'status'/);
+});
