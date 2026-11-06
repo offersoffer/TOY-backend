@@ -417,6 +417,48 @@ const COLUMN_PATCHES = [
  */
 const STATEMENT_PATCHES = [
   {
+    name: 'permission catalog matches src/config/permissions.js',
+    // Must stay first: every grant patch below joins `permissions` by name, and
+    // a name the catalog is missing does more than skip its own grant. The
+    // grant's `check` joins that same absent row, matches nothing, concludes
+    // there is nothing to do - and the migration reports success while the
+    // screen still answers 403. The visibility patch further down creates four
+    // rows for exactly this reason; §25's claim permissions fell into the same
+    // hole with no such rescue, which is why no shop Admin on a database seeded
+    // before §25 could open Verify Claim or Redemptions.
+    //
+    // Reconciling the whole catalog here closes the hole for every grant that
+    // follows, instead of one name list at a time. It grants nobody anything on
+    // its own: a row in `permissions` only takes effect once a role points at
+    // it, and the role presets stay deliberate - which is why this does not
+    // reconcile ADMIN, whose grants an operator may have revoked on purpose.
+    check: async (connection) => {
+      const wanted = Object.keys(permissions.PERMISSIONS);
+      const [rows] = await connection.query('SELECT name FROM permissions WHERE name IN (?)', [
+        wanted,
+      ]);
+      return rows.length < wanted.length;
+    },
+    run: async (connection) => {
+      for (const [name, entry] of Object.entries(permissions.PERMISSIONS)) {
+        await connection.query(
+          `INSERT INTO permissions (name, description, category) VALUES (?, ?, ?)
+           ON DUPLICATE KEY UPDATE description = VALUES(description), category = VALUES(category)`,
+          [name, entry.description, entry.category],
+        );
+      }
+      // Super Admin holds every permission by definition (§4) - `SYSTEM_ROLES`
+      // spells its preset as the full list - and nothing grants one added after
+      // the role row was seeded.
+      await connection.query(
+        `INSERT IGNORE INTO role_permissions (role_id, permission_id)
+         SELECT r.id, p.id FROM roles r JOIN permissions p ON p.name IN (?)
+          WHERE r.name = 'SUPER_ADMIN'`,
+        [permissions.SYSTEM_ROLES.SUPER_ADMIN.permissions],
+      );
+    },
+  },
+  {
     name: "offer_views.event_type += 'impression'",
     // V2 tracks impressions to close the top of the funnel (§24).
     check: async (connection, dbName) => {
