@@ -192,6 +192,11 @@ const CAPTIONS = [
   ['Claim in seconds', 'One tap, then show it at the counter'],
   ['Everything close by', 'Sorted by how far you actually have to walk'],
   ['Follow the shops you like', 'Save a shop and hear when it posts something new'],
+  // Every word of this one is on the screen above it: "Step 3 of 6" in the
+  // stepper, the map with its pin, and "Drag the map so the pin sits on your
+  // shop front" under it. An earlier draft said "free to start", which is the
+  // web wizard's subtitle and appears nowhere on the phone.
+  ['Own a shop? List it yourself', 'Six steps, and you place your own pin on the map'],
 ];
 
 /** The frame: brand ground, caption above, a bezelled capture below. */
