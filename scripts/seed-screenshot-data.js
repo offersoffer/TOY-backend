@@ -126,7 +126,7 @@ const SHOP_COVERS = {
 const SHOPS = [
   {
     name: 'Vaigai Silks',
-    category: 'Fashion',
+    category: 'Clothing',
     description:
       'Four generations of Kanchipuram and Soft Silk sarees, bridal collections and daily wear, on the same street since 1962.',
     city: 'Madurai',
@@ -160,7 +160,7 @@ const SHOPS = [
   },
   {
     name: 'Simmakkal Sweets & Snacks',
-    category: 'Food & Beverages',
+    category: 'Food',
     description:
       'Madurai halwa, jangiri and hot evening snacks made fresh twice a day. Takeaway and bulk orders for weddings.',
     city: 'Madurai',
@@ -274,7 +274,7 @@ const SHOPS = [
   },
   {
     name: 'Kovai Coffee House',
-    category: 'Food & Beverages',
+    category: 'Food',
     description:
       'Filter coffee roasted in-house, South Indian breakfast until noon, and a bakery counter that sells out by six.',
     city: 'Coimbatore',
@@ -374,7 +374,7 @@ const SHOPS = [
   },
   {
     name: 'Noyyal Home Essentials',
-    category: 'Home & Living',
+    category: 'Home & Furniture',
     description:
       'Kitchenware, storage and home textiles. Same-day delivery across Coimbatore on orders before 2 PM.',
     city: 'Coimbatore',
@@ -408,7 +408,7 @@ const SHOPS = [
   },
   {
     name: 'Race Course Bakers',
-    category: 'Food & Beverages',
+    category: 'Food',
     description:
       'Celebration cakes, fresh bread and savoury puffs, baked through the night and sold from seven in the morning.',
     city: 'Coimbatore',
