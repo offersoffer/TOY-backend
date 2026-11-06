@@ -9,24 +9,49 @@ and then upgraded. The claims here are observations from that rehearsal.
 
 ---
 
-## 1. The order matters
+## 1. The order matters, and the obvious order is impossible
+
+The migration has to run **before** the code deploys. But the server can only
+run the migration it has, and the new one arrives with the deploy — so
+"migrate on the server, then push" cannot work for this release. It was tried
+and quietly applied the *old* migration: 73 statements instead of 75, none of
+the new columns.
+
+Run the new migration from a developer checkout, over an SSH tunnel, before
+pushing:
 
 ```bash
-# 1. Migrate, as the migration user, on the production host.
-npm run db:migrate
+# 1. Borrow the API server's network position. RDS is VPC-private, so the
+#    connection arrives from 172.31.x and matches the grant.
+ssh -f -N -L 13306:<rds-endpoint>:3306 offersoffer
 
-# 2. Then push. The workflow deploys code only; it never migrates.
+# 2. Migrate from the checkout that HAS the new migration. Every DB_* value is
+#    explicit so nothing falls back to the developer's own .env.
+cd TOY-backend
+read -rsp "offers_migrate_prod password: " MIGPW && echo
+DB_HOST=127.0.0.1 DB_PORT=13306 DB_NAME=offers_production \
+DB_USER=offers_migrate_prod DB_PASSWORD="$MIGPW" node src/db/migrate.js
+unset MIGPW
+
+# 3. Close the tunnel, then push. The workflow deploys code only.
+pkill -f "13306:<rds-endpoint>"
 git push
 ```
 
-**Pushing first breaks shop creation.** `shop.service.create` now writes
-`registration_source` and `verification_status`, and on a database without
-those columns every shop creation — admin-created ones included — fails. The
-window is however long the migration takes afterwards.
+`NODE_ENV` is deliberately left unset: it keeps `productionGuard` out of the
+way, which exists to stop the *application* booting on wrong credentials and
+has nothing useful to say about a migration pointed at production on purpose.
+The connection is plain TCP — there is no TLS config in `pool.js` — so the
+tunnel needs no certificate handling.
 
-There is no reverse dependency: the migration is safe to run against the
-*old* code, because the old code simply ignores the new columns. So migrating
-early is free and migrating late is not.
+**Deploying before the migration is an outage, not a degradation.**
+`accessControl.loadAccessContext` now selects `s.verification_status`, and the
+auth middleware calls it on *every authenticated request*. On a database
+without the column, every signed-in request fails — not merely shop creation.
+
+There is no reverse dependency: the migration is safe to run against the old
+code, because the old code ignores the new columns. Migrating early is free;
+migrating late is an outage.
 
 ---
 
