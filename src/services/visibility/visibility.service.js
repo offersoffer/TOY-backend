@@ -51,8 +51,15 @@ async function customerContext(user) {
     query('SELECT shop_id FROM followed_shops WHERE user_id = ?', [user.id]),
     query('SELECT minimum_discount_percent FROM users WHERE id = ?', [user.id]),
     query(
-      `SELECT DISTINCT term FROM search_history WHERE user_id = ?
-        ORDER BY id DESC LIMIT 10`,
+      // GROUP BY rather than DISTINCT: the ordering column has to be an
+      // aggregate for MySQL to allow it alongside de-duplication, and under
+      // ONLY_FULL_GROUP_BY (the default since 8.0) `DISTINCT term ORDER BY id`
+      // is an error rather than a warning. MAX(id) keeps "most recent first"
+      // over the de-duplicated terms.
+      `SELECT term FROM search_history WHERE user_id = ?
+        GROUP BY term
+        ORDER BY MAX(id) DESC
+        LIMIT 10`,
       [user.id],
     ),
   ]);
