@@ -8,11 +8,12 @@ const env = require('../../config/env');
 const geocoding = require('../../services/geocoding');
 const validate = require('../../middleware/validate');
 const asyncHandler = require('../../utils/asyncHandler');
-const { authenticate } = require('../../middleware/auth');
+const { optionalAuth } = require('../../middleware/auth');
 const { ok } = require('../../utils/respond');
 
 /**
- * Geocoding for the map picker (V3 §5, §6, §26).
+ * Geocoding for the map picker (V3 §5, §6, §26) and for the customer app's
+ * location picker (Guest Browsing §20).
  *
  * The clients never talk to Nominatim directly. Three reasons, in order of how
  * much they matter:
@@ -27,18 +28,34 @@ const { ok } = require('../../utils/respond');
  *      location model and is just as true of how coordinates are found.
  *
  * Nothing here writes. The merchant's chosen pin only becomes real when they
- * save the shop or branch.
+ * save the shop or branch, and a customer's chosen area is only ever stored on
+ * their own device.
+ *
+ * So both routes are open to anonymous callers. They were authenticated while
+ * the merchant map picker was the only caller, but the customer app reaches
+ * this from "Choose Area", which a guest can be standing on with no account at
+ * all - and a guest who has declined OS location has no other way to say where
+ * they are. Requiring a token there did not protect anything: the answers come
+ * from a public geocoder and depend on nothing about who is asking. What does
+ * need protecting is the outbound budget, which is what the limiter below is
+ * for.
  */
 
 const router = express.Router();
 
 /**
  * Tighter than the general API limiter because each call leaves this server.
- * Per user rather than per IP: a shop's staff often share one office address.
+ *
+ * Keyed per user where there is one, because a shop's staff often share one
+ * office address and would otherwise exhaust each other's budget. Anonymous
+ * callers fall back to the IP, and get a smaller allowance: a signed-in
+ * merchant placing a pin types and retries, while a customer is choosing one
+ * area, and an IP is a weaker identity than an account - it can be a whole
+ * office behind NAT, so the budget behind it should not be a per-person one.
  */
 const geoLimiter = rateLimit({
   windowMs: 60 * 1000,
-  limit: 30,
+  limit: (req) => (req.user?.id ? 30 : 10),
   standardHeaders: true,
   legacyHeaders: false,
   skip: () => env.nodeEnv === 'test',
@@ -59,7 +76,26 @@ const reverseQuery = z.object({
   longitude: z.coerce.number().min(-180).max(180),
 });
 
-router.use(authenticate, geoLimiter);
+/**
+ * `optionalAuth`, not `authenticate`.
+ *
+ * This router was written for the merchant map picker, where there is always a
+ * token, so it required one. `SelectLocationScreen` in the customer app now
+ * geocodes through `/search` as well - it is reached from the home "Select
+ * Location" chip, from "Choose Area" on Near Me, and from Profile - and that
+ * screen is reachable by a guest, because "Continue as Guest" is a first-class
+ * button on the welcome screen. A token requirement here would have answered
+ * 401 on every one of those paths, and not merely failed the search: the mobile
+ * client retries a 401 once, finds no refresh token, and ends the session, so
+ * the guest would have been thrown back to the welcome screen for typing a city
+ * name.
+ *
+ * Nothing here writes, nothing here is per-user, and the responses are public
+ * geography, so there is nothing for a token to protect. What the token was
+ * really doing was funding the Nominatim budget per account, and the limiter
+ * above keeps doing that by IP for anonymous callers.
+ */
+router.use(optionalAuth, geoLimiter);
 
 /** §6 Method 1: the merchant types an address and picks from the answers. */
 router.get(
