@@ -36,6 +36,13 @@ require.cache[nodemailerPath] = {
 // short-circuits to the outbox and there is nothing to report on.
 process.env.SMTP_HOST = process.env.SMTP_HOST || 'smtp.example.test';
 
+// These tests are about transport status, not about link correctness. A public
+// APP_URL keeps the outbox diversion out of the way - with a developer `.env`
+// supplying `http://localhost:4200`, every send below would be withheld and
+// never reach the transport whose behaviour is under test. The diversion itself
+// is covered in `test/mail/local-links.test.js`.
+process.env.APP_URL = 'https://offersoffer.in';
+
 const mailer = require('../../src/utils/mailer');
 
 const message = { to: 'someone@example.test', subject: 'Test', text: 'Body' };

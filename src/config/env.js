@@ -162,6 +162,19 @@ const env = {
     user: process.env.SMTP_USER || '',
     password: process.env.SMTP_PASSWORD || '',
     from: process.env.MAIL_FROM || 'OffersOffer <no-reply@offers.app>',
+    /**
+     * Opt-in to sending real mail from a development machine whose `APP_URL`
+     * is a local address.
+     *
+     * Off by default because the combination is a trap: a developer `.env` with
+     * working SMTP credentials and `APP_URL=http://localhost:4200` sends a
+     * genuine email to a genuine inbox whose every link is dead for the person
+     * who receives it. That happened - an offer notification arrived reading
+     * `http://localhost:4200/offers/...`. The mailer diverts such messages to
+     * `mail-outbox/` instead; set this when you deliberately want the SMTP path
+     * exercised and do not care that the links only work on your own machine.
+     */
+    sendWithLocalLinks: bool(process.env.MAIL_SEND_WITH_LOCAL_LINKS),
   },
 
   /**

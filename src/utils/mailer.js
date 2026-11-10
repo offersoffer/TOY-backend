@@ -6,6 +6,7 @@ const nodemailer = require('nodemailer');
 const env = require('../config/env');
 const logger = require('./logger');
 const { maskEmail } = require('./mask');
+const { LOCAL_ADDRESS } = require('../config/productionGuard');
 
 /**
  * Outbound email.
@@ -21,6 +22,25 @@ const { maskEmail } = require('./mask');
 
 /** True when a real SMTP transport is configured. */
 const isConfigured = Boolean(env.mail.host);
+
+/**
+ * Whether a configured transport is actually allowed to send.
+ *
+ * Production always sends - `productionGuard` has already refused to start if
+ * `APP_URL` is local, so the links are real by the time we get here.
+ *
+ * Outside production the answer is no when `APP_URL` points at this machine,
+ * because then SMTP credentials plus a local link is the one combination that
+ * puts an unusable email in a real person's inbox: the send succeeds, the
+ * message looks right to whoever triggered it, and the recipient gets a
+ * "View this offer" button pointing at `http://localhost:4200`. Such messages
+ * go to `mail-outbox/` instead, which is where mail already goes when SMTP is
+ * absent - so this is the existing fallback, applied to a case that used to
+ * slip past it. `MAIL_SEND_WITH_LOCAL_LINKS=true` opts back in.
+ */
+const linksAreLocal = LOCAL_ADDRESS.test(env.appUrl);
+const mayUseSmtp =
+  isConfigured && (env.isProduction || !linksAreLocal || env.mail.sendWithLocalLinks);
 
 /**
  * What the transport is actually doing - which is not the same question as
@@ -95,9 +115,32 @@ function writeToOutbox(message) {
  * @returns {Promise<{delivered: boolean, transport: 'smtp'|'outbox', error?: string}>}
  */
 async function send({ to, subject, text, html }) {
-  if (!isConfigured) {
+  if (!mayUseSmtp) {
     const file = writeToOutbox({ to, subject, text, html });
     const link = firstLink(text);
+
+    // Two different reasons to be here, and they need different wording: no
+    // transport at all, versus a transport we are deliberately not using
+    // because the links in this message only work on this machine.
+    if (isConfigured) {
+      logger.warn(
+        {
+          event: 'MAIL_NOT_SENT',
+          dependency: 'EMAIL',
+          category: 'NOTIFICATION',
+          reason: 'LOCAL_APP_URL',
+          subject,
+          recipient: maskEmail(to),
+          app_url: env.appUrl,
+          outbox_file: file ?? null,
+          ...(link ? { dev_link: link } : {}),
+        },
+        `APP_URL is "${env.appUrl}", so every link in "${subject}" would be dead for the ` +
+          'recipient. Saved to the outbox instead of being sent. Set MAIL_SEND_WITH_LOCAL_LINKS=true ' +
+          'to send anyway.',
+      );
+      return { delivered: false, transport: 'outbox', reason: 'LOCAL_APP_URL' };
+    }
 
     // §37: subject and outbox path, recipient masked. `link` carries a
     // single-use verification or reset token, so it is kept for the developer

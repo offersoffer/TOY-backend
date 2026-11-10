@@ -104,6 +104,58 @@ function check(env) {
   }
 
   problems.push(...storageProblems(env.storage));
+  problems.push(...outboundAddressProblems(env));
+
+  return problems;
+}
+
+/** Addresses that only ever resolve on the machine that produced them. */
+const LOCAL_ADDRESS = /(^|\/\/)(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|host\.docker\.internal|10\.0\.2\.2)(:|\/|$)/i;
+
+/**
+ * The addresses this server writes into things other people read.
+ *
+ * `APP_URL` is not an internal setting. It is the link in every notification
+ * email, and it is the URL encoded into the QR code on a customer's claim
+ * (`claim.service.js` builds `${appUrl}/claims/scan?t=...`). Both default to
+ * `http://localhost:4200` when the variable is absent, and a default is exactly
+ * what makes this invisible: the server starts, the emails send, the QR codes
+ * render, and every one of them points the recipient at their own machine.
+ * Nothing on the sending side ever looks wrong.
+ *
+ * It was wrong in a real inbox before this check existed - an offer email whose
+ * "View this offer" button, and the copy-paste link printed beneath it, both
+ * read `http://localhost:4200/offers/...`. The only reader who can tell is the
+ * recipient, which is the worst possible place to discover it.
+ *
+ * So production states these addresses or refuses to run, on the same reasoning
+ * as every other rule in this file: a missing value is a refusal, not a default.
+ */
+function outboundAddressProblems(env) {
+  const problems = [];
+  const addresses = [
+    ['APP_URL', env.appUrl, 'the links in notification emails and the URL inside every claim QR code'],
+    ['PUBLIC_API_URL', env.publicApiUrl, 'the addresses the API hands out for its own resources'],
+  ];
+
+  for (const [name, value, purpose] of addresses) {
+    if (!value) {
+      problems.push(
+        `${name} is not set. It builds ${purpose}, so production must state it rather than ` +
+          'fall back to a development default.',
+      );
+    } else if (LOCAL_ADDRESS.test(value)) {
+      problems.push(
+        `${name} is "${value}", which is only reachable from the server itself. It builds ` +
+          `${purpose} - a customer opening one of those reaches their own machine, not OffersOffer.`,
+      );
+    } else if (!/^https:\/\/[^/]+/.test(value)) {
+      problems.push(
+        `${name} "${value}" must be a public https:// address. It is sent to customers, and ` +
+          'a link they cannot trust is a link they should not click.',
+      );
+    }
+  }
 
   return problems;
 }
@@ -166,4 +218,4 @@ function assertProductionConfig(env) {
   );
 }
 
-module.exports = { assertProductionConfig, check, NON_PRODUCTION_NAME };
+module.exports = { assertProductionConfig, check, NON_PRODUCTION_NAME, LOCAL_ADDRESS };

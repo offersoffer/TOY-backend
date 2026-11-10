@@ -61,7 +61,7 @@ The startup guard also rejects a `DB_NAME` containing `dev`, `staging`, `test`,
 | `API_PREFIX` | Optional | `/api` | Changing it breaks published client URLs. |
 | `CORS_ORIGINS` | **Required** | `http://localhost:4200` | `https://offersoffer.in,https://www.offersoffer.in`. The localhost default allows nothing useful in production. |
 | `PUBLIC_API_URL` | **Required** | `http://localhost:3000` | `https://offersoffer.in`. Uploaded-image URLs are built from it, so a wrong value produces images that 404 for every customer. |
-| `APP_URL` | **Required** | `http://localhost:4200` | `https://offersoffer.in`. Email verification and password-reset links are built from it — wrong here means every reset link points at localhost. |
+| `APP_URL` | **Required**, enforced at startup | `http://localhost:4200` | `https://offersoffer.in`. Every notification email link **and the URL inside every claim QR code** are built from it. Production refuses to start if it is absent, local, or not `https://` — see below. |
 | `MOBILE_APP_SCHEME` | Recommended | `offersapp` | Must match `expo.scheme` in the mobile app, or notification deep links open nothing. |
 
 ## 3. Authentication
@@ -246,10 +246,35 @@ AI_SERVICE_URL          (if AI_SERVICE_ENABLED is true)
 ```
 
 These are enforced at startup: `NODE_ENV`, `PRODUCTION_DB_NAME`, `DB_USER`,
-`DB_PASSWORD`, `SEED_DEMO_DATA`, the two JWT secrets, and the three storage
-settings. The rest fail later and more quietly: a wrong `APP_URL` sends every
-password-reset link to localhost, and an empty `SMTP_HOST` writes mail to a
+`DB_PASSWORD`, `SEED_DEMO_DATA`, the two JWT secrets, the three storage
+settings, and — since the incident below — `APP_URL` and `PUBLIC_API_URL`.
+The rest fail later and more quietly: an empty `SMTP_HOST` writes mail to a
 directory instead of sending it.
+
+### `APP_URL`, and why it is now a startup failure
+
+This file used to say that a wrong `APP_URL` "fails later and more quietly",
+and listed sending every password-reset link to localhost as an example. That
+turned out to understate it. `APP_URL` is also the address encoded into every
+claim QR code (`claim.service.js` builds `${appUrl}/claims/scan?t=...`), and it
+has no safe default — absent, it becomes `http://localhost:4200`, and the
+server has no way to notice. An offer notification reached a real inbox with
+both its button and its printed fallback link reading
+`http://localhost:4200/offers/...`.
+
+Nothing on the sending side looks wrong in that state: the process starts, the
+mail sends, the QR renders, the logs are clean. The only reader who can tell is
+the recipient. So `APP_URL` and `PUBLIC_API_URL` now have to be public `https://`
+addresses in production or the process refuses to start, on the same reasoning
+as every other rule in `productionGuard.js`.
+
+Set them **before** deploying a build that contains this check. A production
+`.env.production` missing `APP_URL` boots today and will not boot afterwards.
+
+Outside production the same condition is handled differently: mail whose links
+are local is written to `mail-outbox/` rather than sent, so a developer `.env`
+with working SMTP credentials cannot put a dead link in a real inbox.
+`MAIL_SEND_WITH_LOCAL_LINKS=true` opts back in.
 
 See `docs/production-database.md` for the go-live runbook and
 `.env.production.example` for a fill-in-the-blanks template.

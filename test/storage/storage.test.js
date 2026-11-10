@@ -166,6 +166,11 @@ test('production refuses to start without shared image storage', () => {
   const base = {
     db: { database: 'offers_production', host: 'db', user: 'offers_app_prod', password: 'x' },
     seed: { demoData: false },
+    // Public addresses, so the only problems this test can see are storage
+    // ones. The outbound-address rules are covered in
+    // `test/mail/local-links.test.js`.
+    appUrl: 'https://offersoffer.in',
+    publicApiUrl: 'https://offersoffer.in',
   };
   const previous = process.env.PRODUCTION_DB_NAME;
   process.env.PRODUCTION_DB_NAME = 'offers_production';
