@@ -87,6 +87,18 @@ const branchBody = z.object({
   locationConfirmed: z.coerce.boolean().optional(),
   openingHours,
   contactNumber: optionalText(30),
+  // The person a customer is put through to at this branch. Optional to save,
+  // required to publish - see `services/branchReadiness.js` for why those are
+  // different moments.
+  contactPersonName: optionalText(160),
+  contactPersonEmail: z
+    .string()
+    .trim()
+    .max(190)
+    .email('Enter a valid email address')
+    .optional()
+    .nullable()
+    .or(z.literal('').transform(() => null)),
   isPrimary: z.coerce.boolean().optional().default(false),
   status: z.enum(['active', 'inactive']).optional().default('active'),
 });

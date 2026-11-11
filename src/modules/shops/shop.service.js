@@ -8,6 +8,7 @@ const { limitOffset } = require('../../utils/pagination');
 const accessControl = require('../../services/accessControl');
 const entitlements = require('../../services/entitlements');
 const shopVerification = require('../../services/shopVerification');
+const branchReadiness = require('../../services/branchReadiness');
 const geocoding = require('../../services/geocoding');
 const shopProfile = require('./shopProfile');
 const { PLANS, minimumPlanForLimit } = require('../../config/plans');
@@ -313,8 +314,15 @@ function mapBranch(row) {
     placeId: row.place_id ?? null,
     openingHours: parseJson(row.opening_hours),
     contactNumber: row.contact_number,
+    contactPersonName: row.contact_person_name ?? null,
+    contactPersonEmail: row.contact_person_email ?? null,
     isPrimary: Boolean(row.is_primary),
     status: row.status,
+    // What the merchant still owes before offers can go live here. Served with
+    // the branch so a dashboard can say which branch needs attention without
+    // re-deriving the rule in two clients.
+    publishBlockers: branchReadiness.missingFor(row),
+    readyToPublish: branchReadiness.isReady(row),
     offerCount: row.offer_count === undefined ? undefined : Number(row.offer_count),
     distanceKm:
       row.distance_km === null || row.distance_km === undefined
@@ -392,6 +400,8 @@ const BRANCH_COLUMNS = [
   'place_id',
   'opening_hours',
   'contact_number',
+  'contact_person_name',
+  'contact_person_email',
   'is_primary',
   'status',
 ];
@@ -433,6 +443,8 @@ function branchValues(branch, coordinates, existing = null) {
     coordinates.placeId,
     branch.openingHours ? JSON.stringify(branch.openingHours) : null,
     branch.contactNumber ?? null,
+    branch.contactPersonName ?? null,
+    branch.contactPersonEmail ?? null,
     branch.isPrimary ? 1 : 0,
     branch.status ?? 'active',
   ];

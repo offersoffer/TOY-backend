@@ -409,6 +409,21 @@ const COLUMN_PATCHES = [
     sql: `ALTER TABLE shops ADD COLUMN verification_details JSON
             DEFAULT NULL AFTER verification_reason`,
   },
+
+  // Who a customer reaches at a particular branch. Both stay nullable: the
+  // readiness rule in `services/branchReadiness.js` decides when their absence
+  // matters, and it only ever blocks *new* publishing, so backfilling these
+  // would be inventing contact details nobody gave us.
+  {
+    table: 'shop_branches',
+    column: 'contact_person_name',
+    sql: `ALTER TABLE shop_branches ADD COLUMN contact_person_name VARCHAR(160)
+            DEFAULT NULL AFTER contact_number`,
+    after: [
+      `ALTER TABLE shop_branches ADD COLUMN contact_person_email VARCHAR(190)
+         DEFAULT NULL AFTER contact_person_name`,
+    ],
+  },
 ];
 
 /**

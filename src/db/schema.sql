@@ -262,6 +262,14 @@ CREATE TABLE IF NOT EXISTS shop_branches (
   place_id       VARCHAR(120)            DEFAULT NULL,
   opening_hours  JSON                    DEFAULT NULL,
   contact_number VARCHAR(30)             DEFAULT NULL,
+  -- Who a customer reaches at THIS branch, published on the branch listing.
+  --
+  -- Deliberately not the same thing as the branch's administrator. The admin
+  -- is a `shop_members` row with a login and permissions; this is a name and
+  -- an address printed for customers, and the two are often different people -
+  -- the counter supervisor administers, the manager is who you ask for.
+  contact_person_name  VARCHAR(160)      DEFAULT NULL,
+  contact_person_email VARCHAR(190)      DEFAULT NULL,
   is_primary     TINYINT(1)      NOT NULL DEFAULT 0,
   status         ENUM('active','inactive') NOT NULL DEFAULT 'active',
   created_at     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,

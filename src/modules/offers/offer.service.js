@@ -8,6 +8,7 @@ const { limitOffset } = require('../../utils/pagination');
 const accessControl = require('../../services/accessControl');
 const entitlements = require('../../services/entitlements');
 const shopVerification = require('../../services/shopVerification');
+const branchReadiness = require('../../services/branchReadiness');
 const analyticsEvents = require('../../services/analyticsEvents');
 const visibilityEvents = require('../../services/visibility/visibilityAnalytics.service');
 const subscriptions = require('../subscriptions/subscription.service');
@@ -628,6 +629,17 @@ async function create(payload, user) {
 
     await assertBranchesBelongToShop(connection, payload.shopId, payload.branchIds);
 
+    // A draft is not a promise to anyone, so an incomplete branch may still
+    // carry one. Everything else is about to be shown to customers.
+    if (status !== 'draft') {
+      await branchReadiness.assertBranchesReadyToPublish(
+        connection,
+        payload.shopId,
+        payload.applicabilityType,
+        payload.branchIds,
+      );
+    }
+
     const [result] = await connection.execute(
       `INSERT INTO offers (
          shop_id, category_id, subcategory_id, title, product_name, description, offer_text,
@@ -744,6 +756,36 @@ async function update(offerId, payload, user, previous) {
   await transaction(async (connection) => {
     await assertBranchesBelongToShop(connection, previous.shop_id, payload.branchIds);
 
+    /**
+     * Branch readiness is checked when an offer *becomes* a promise to a
+     * customer, not on every edit.
+     *
+     * Publishing a draft, or pointing a live offer at different branches, is
+     * new activity and meets the rule. Fixing a typo in the title of an offer
+     * that has been live for a month is not, and refusing that would make the
+     * rule retroactive by the back door - the merchant would be unable to
+     * correct a mistake until they had finished an unrelated form.
+     */
+    const [previousLinks] = await connection.execute(
+      'SELECT branch_id FROM offer_locations WHERE offer_id = ?',
+      [offerId],
+    );
+    const before = new Set(previousLinks.map((row) => Number(row.branch_id)));
+    const after = new Set((payload.branchIds || []).map(Number));
+    const retargeted =
+      payload.applicabilityType !== previous.applicability_type ||
+      before.size !== after.size ||
+      [...after].some((id) => !before.has(id));
+
+    if (keepStatus !== 'draft' && (previous.status === 'draft' || retargeted)) {
+      await branchReadiness.assertBranchesReadyToPublish(
+        connection,
+        previous.shop_id,
+        payload.applicabilityType,
+        payload.branchIds,
+      );
+    }
+
     await connection.execute(
       `UPDATE offers SET
          category_id = ?, subcategory_id = ?, title = ?, product_name = ?, description = ?,
@@ -847,6 +889,18 @@ async function changeStatus(offer, status, user) {
 
   const resolved =
     status === 'active' ? resolveStatus('active', new Date(offer.start_date), new Date(offer.end_date)) : status;
+
+  // The third way an offer reaches a customer, after create and update. A gate
+  // on two of the three is not a gate.
+  if (resolved !== 'draft' && offer.status === 'draft') {
+    const links = await query('SELECT branch_id FROM offer_locations WHERE offer_id = ?', [offer.id]);
+    await branchReadiness.assertBranchesReadyToPublish(
+      query,
+      offer.shop_id,
+      offer.applicability_type,
+      links.map((row) => Number(row.branch_id)),
+    );
+  }
 
   await execute('UPDATE offers SET status = ?, updated_by = ? WHERE id = ?', [resolved, user.id, offer.id]);
 
