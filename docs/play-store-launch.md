@@ -61,10 +61,10 @@ does not block this release.
 Verified, so do not redo:
 
 ```
-[x] Production AAB, versionCode 6 — the first without the in-app checkout.
-    Built from a dirty tree (an uncommitted SelectLocationScreen fix), so it
-    is NOT reproducible from a commit; rebuild if provenance matters.
-    versionCode 5 predates the removal and must not be submitted.
+[x] Production AAB, versionCode 7, built from mobile commit 9e9806a with a
+    clean tree — this is the one to submit.
+    versionCode 5 predates the checkout removal; 6 came from a dirty tree and
+    is not reproducible from a commit. Submit neither.
 [x] https://offersoffer.in/privacy        200
 [x] https://offersoffer.in/terms          200
 [x] https://offersoffer.in/support        200
