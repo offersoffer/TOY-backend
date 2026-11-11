@@ -124,6 +124,29 @@ function branchRowClause(user, alias = 'b') {
   return { sql: ` AND (${parts.join(' OR ')})`, params };
 }
 
+/**
+ * The confinement for a table that *points at* a branch, rather than being
+ * one: `shop_members.branch_id`, and anything else keyed the same way.
+ *
+ * Separate from `branchRowClause` because that one compares the row's own id,
+ * which on `shop_members` is the member - comparing it to a branch id would
+ * have quietly counted the wrong thing rather than failed.
+ */
+function branchColumnClause(user, alias, column) {
+  const scopes = accessControl.branchScopesFor(user, 'VIEW_ANALYTICS');
+  if (scopes.size === 0) return { sql: '', params: [] };
+
+  const shopIds = [...scopes.keys()];
+  const parts = [`${alias}.shop_id NOT IN (${shopIds.map(() => '?').join(',')})`];
+  const params = [...shopIds];
+
+  for (const [shopId, branchId] of scopes) {
+    parts.push(`(${alias}.shop_id = ? AND ${alias}.${column} = ?)`);
+    params.push(shopId, branchId);
+  }
+  return { sql: ` AND (${parts.join(' OR ')})`, params };
+}
+
 /** Shop scope and branch confinement together, for the `offers o` queries. */
 function offerScopeClause(user, scope) {
   const shop = scopeClause(scope);
@@ -262,14 +285,23 @@ router.get(
         totalFollows: Number(follows.total),
       };
     } else {
+      // "My branches" and "Team members" are the two counters on a merchant's
+      // own dashboard that name things rather than measure them, so for a
+      // branch admin they have to be their branch and their colleagues - a 3
+      // beside "My branches" on the dashboard of someone who runs one of them
+      // is simply wrong, whatever the engagement figures beside it mean.
+      const branchRows = branchRowClause(req.user);
+      const branchMembers = branchColumnClause(req.user, 'sm', 'branch_id');
+      const shopIn = `IN (${scope.map(() => '?').join(',')})`;
       const [branches, members] = await Promise.all([
         rawQuery(
-          `SELECT COUNT(*) AS total FROM shop_branches WHERE shop_id IN (${scope.map(() => '?').join(',')})`,
-          scope,
+          `SELECT COUNT(*) AS total FROM shop_branches b WHERE b.shop_id ${shopIn}${branchRows.sql}`,
+          [...scope, ...branchRows.params],
         ),
         rawQuery(
-          `SELECT COUNT(*) AS total FROM shop_members WHERE shop_id IN (${scope.map(() => '?').join(',')})`,
-          scope,
+          `SELECT COUNT(*) AS total FROM shop_members sm
+            WHERE sm.shop_id ${shopIn}${branchMembers.sql}`,
+          [...scope, ...branchMembers.params],
         ),
       ]);
       data.shop = { branches: Number(branches[0].total), members: Number(members[0].total) };
