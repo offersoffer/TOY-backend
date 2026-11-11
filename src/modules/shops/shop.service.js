@@ -946,6 +946,8 @@ async function listMembers(shopId) {
     userStatus: row.user_status,
     branchId: row.branch_id === null ? null : Number(row.branch_id),
     branchName: row.branch_name,
+    /** Confined to that branch, as opposed to merely working at it. */
+    branchRestricted: Boolean(row.is_branch_restricted) && row.branch_id !== null,
     roleId: row.role_id === null ? null : Number(row.role_id),
     roleName: row.role_name,
     designation: row.designation,
@@ -1000,11 +1002,15 @@ async function addMember(shopId, payload) {
   }
 
   const result = await execute(
-    `INSERT INTO shop_members (shop_id, branch_id, user_id, role_id, designation, status)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO shop_members (shop_id, branch_id, is_branch_restricted, user_id, role_id, designation, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
     [
       shopId,
       payload.branchId ?? null,
+      // Confinement without a branch to be confined to is meaningless, and
+      // storing it would make `branchScopeFor` depend on which of two columns
+      // it happened to read first.
+      payload.branchId && payload.branchRestricted ? 1 : 0,
       userId,
       payload.roleId ?? null,
       payload.designation ?? null,
@@ -1042,11 +1048,19 @@ async function updateMember(shopId, memberId, payload) {
     if (!branch) throw ApiError.badRequest('That branch does not belong to this shop');
   }
 
+  const branchId = payload.branchId !== undefined ? payload.branchId : existing.branch_id;
+  // Moving a member off a branch cannot leave them confined to it.
+  const restricted =
+    payload.branchRestricted !== undefined
+      ? payload.branchRestricted
+      : Boolean(existing.is_branch_restricted);
+
   await execute(
-    `UPDATE shop_members SET branch_id = ?, role_id = ?, designation = ?, status = ?
+    `UPDATE shop_members SET branch_id = ?, is_branch_restricted = ?, role_id = ?, designation = ?, status = ?
       WHERE id = ? AND shop_id = ?`,
     [
-      payload.branchId !== undefined ? payload.branchId : existing.branch_id,
+      branchId,
+      branchId && restricted ? 1 : 0,
       payload.roleId !== undefined ? payload.roleId : existing.role_id,
       payload.designation !== undefined ? payload.designation : existing.designation,
       payload.status ?? existing.status,

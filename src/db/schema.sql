@@ -288,6 +288,18 @@ CREATE TABLE IF NOT EXISTS shop_members (
   id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   shop_id     BIGINT UNSIGNED NOT NULL,
   branch_id   BIGINT UNSIGNED         DEFAULT NULL,
+  -- Whether `branch_id` *confines* this member, or merely says where they work.
+  --
+  -- The two are not the same and the difference is not cosmetic. A branch has
+  -- always scoped redemption - a member attached to one may only redeem claims
+  -- at that counter - but a "Store Manager, Coimbatore" who also runs the
+  -- shop's offers is attached without being confined. Inferring confinement
+  -- from a non-null `branch_id` would have taken shop-wide powers away from
+  -- every such member the day it shipped, so confinement is stated.
+  --
+  -- 0 for every row that existed before this column, which is what keeps that
+  -- from happening. A branch admin created on purpose gets 1.
+  is_branch_restricted TINYINT(1) NOT NULL DEFAULT 0,
   user_id     BIGINT UNSIGNED NOT NULL,
   role_id     BIGINT UNSIGNED         DEFAULT NULL,
   designation VARCHAR(120)            DEFAULT NULL,

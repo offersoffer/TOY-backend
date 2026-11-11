@@ -39,6 +39,7 @@ async function loadAccessContext(userId) {
       `SELECT sm.id            AS member_id,
               sm.shop_id,
               sm.branch_id,
+              sm.is_branch_restricted,
               sm.designation,
               sm.status,
               s.name           AS shop_name,
@@ -63,7 +64,7 @@ async function loadAccessContext(userId) {
         -- exactly as before.
         WHERE sm.user_id = ? AND sm.status = 'active'
           AND (s.status = 'active' OR s.verification_status IS NOT NULL)
-        GROUP BY sm.id, sm.shop_id, sm.branch_id, sm.designation, sm.status,
+        GROUP BY sm.id, sm.shop_id, sm.branch_id, sm.is_branch_restricted, sm.designation, sm.status,
                  s.name, s.slug, s.logo_url, s.verification_status, r.id, r.name`,
       [userId],
     ),
@@ -92,6 +93,8 @@ async function loadAccessContext(userId) {
     memberId: Number(row.member_id),
     shopId: Number(row.shop_id),
     branchId: row.branch_id === null ? null : Number(row.branch_id),
+    /** Attached to a branch is not the same as confined to it. */
+    branchRestricted: Boolean(row.is_branch_restricted) && row.branch_id !== null,
     shopName: row.shop_name,
     shopSlug: row.shop_slug,
     shopLogoUrl: row.shop_logo_url,
@@ -176,6 +179,42 @@ function hasShopPermission(access, shopId, permission) {
   return Boolean(membership && membership.permissions.includes(permission));
 }
 
+/**
+ * The one branch this user is confined to within a shop, or `null` for nobody
+ * who is confined.
+ *
+ * `null` is the dangerous value here, so it is given one meaning and only one:
+ * **unrestricted**. A shop-level member has `branch_id IS NULL` precisely
+ * because they run the whole shop, and a Super Admin has no membership row at
+ * all. Reading either as "branch zero" would lock every shop owner out of
+ * their own shop, which is why this returns early for both rather than
+ * leaving the caller to remember.
+ */
+function branchScopeFor(access, shopId) {
+  if (!access || access.isSuperAdmin) return null;
+  const membership = access.shops.find((shop) => shop.shopId === Number(shopId));
+  if (!membership) return null;
+  // Attachment is not confinement. `branchRestricted` is the stated decision;
+  // `branchId` alone has meant "works here" since long before it meant
+  // anything about permissions, and still scopes redemption on its own.
+  if (!membership.branchRestricted) return null;
+  return membership.branchId ?? null;
+}
+
+/**
+ * Whether this user may act on one particular branch of a shop.
+ *
+ * A branch-scoped member asked about a shop-wide action - `branchId` absent -
+ * is refused, because "every branch" includes branches that are not theirs.
+ * That is the rule that stops a branch admin publishing a shop-wide offer.
+ */
+function mayActOnBranch(access, shopId, branchId) {
+  const scope = branchScopeFor(access, shopId);
+  if (scope === null) return true;
+  if (branchId === null || branchId === undefined) return false;
+  return Number(branchId) === scope;
+}
+
 /** True when the permission is held anywhere - globally or for at least one shop. */
 function hasAnyPermission(access, permission) {
   if (!access) return false;
@@ -195,4 +234,6 @@ module.exports = {
   hasShopPermission,
   hasAnyPermission,
   shopScopeFor,
+  branchScopeFor,
+  mayActOnBranch,
 };

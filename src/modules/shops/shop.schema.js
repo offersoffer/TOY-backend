@@ -144,6 +144,10 @@ const memberBody = z.object({
   name: z.string().trim().min(2).max(120).optional(),
   phone: optionalText(30),
   branchId: z.coerce.number().int().positive().optional().nullable(),
+  // Confines the member to `branchId` instead of merely recording where they
+  // work. Ignored without a branch, because there is nothing to confine them
+  // to; see `shop_members.is_branch_restricted`.
+  branchRestricted: z.coerce.boolean().optional().default(false),
   roleId: z.coerce.number().int().positive().optional().nullable(),
   designation: optionalText(120),
   status: z.enum(['active', 'inactive']).optional().default('active'),
@@ -154,6 +158,7 @@ const memberBody = z.object({
 
 const updateMemberSchema = z.object({
   branchId: z.coerce.number().int().positive().optional().nullable(),
+  branchRestricted: z.coerce.boolean().optional(),
   roleId: z.coerce.number().int().positive().optional().nullable(),
   designation: optionalText(120),
   status: z.enum(['active', 'inactive']).optional(),

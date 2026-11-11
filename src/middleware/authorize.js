@@ -1,7 +1,7 @@
 'use strict';
 
 const ApiError = require('../utils/ApiError');
-const { queryOne } = require('../db/pool');
+const { queryOne, query } = require('../db/pool');
 const access = require('../services/accessControl');
 
 /**
@@ -65,6 +65,29 @@ const loadOfferForWrite = (permission) => async (req, _res, next) => {
     if (!access.hasShopPermission(req.user, offer.shop_id, permission)) {
       throw ApiError.forbidden('This offer belongs to another shop');
     }
+
+    /**
+     * A member who runs one branch may only touch that branch's offers.
+     *
+     * Enforced here, where the offer is loaded, rather than only in the
+     * service: delete has no payload to inspect, so a check that lived on the
+     * way in with the body would guard editing and miss removal entirely.
+     *
+     * A `shop_wide` or `online` offer has no branch of its own, so it belongs
+     * to whoever runs the shop - `mayActOnBranch` refuses a branch-scoped
+     * member for a null branch, which is exactly that.
+     */
+    const branchScope = access.branchScopeFor(req.user, offer.shop_id);
+    if (branchScope !== null) {
+      const links =
+        offer.applicability_type === 'selected_branches'
+          ? await query('SELECT branch_id FROM offer_locations WHERE offer_id = ?', [offer.id])
+          : [];
+      const branchIds = links.map((row) => Number(row.branch_id));
+      const mine = branchIds.length === 1 && branchIds[0] === branchScope;
+      if (!mine) throw ApiError.forbidden('This offer belongs to another branch');
+    }
+
     req.offer = offer;
     next();
   } catch (error) {

@@ -553,6 +553,34 @@ function resolveStatus(requested, startDate, endDate) {
   return 'active';
 }
 
+/**
+ * A branch-scoped member may only aim an offer at their own branch.
+ *
+ * `shop_wide` and `online` are both refused for them: the first promises the
+ * offer at branches they do not run, and the second is the shop's own
+ * storefront rather than any branch's. A shop-level member and a Super Admin
+ * pass straight through, because `branchScopeFor` answers `null` for both.
+ *
+ * Checked before the offer is written rather than after, so a refusal never
+ * leaves a half-made offer behind.
+ */
+function assertTargetsOwnBranch(user, shopId, applicabilityType, branchIds = []) {
+  const scope = accessControl.branchScopeFor(user, shopId);
+  if (scope === null) return;
+
+  if (applicabilityType !== 'selected_branches') {
+    throw ApiError.forbidden(
+      'You run one branch, so an offer has to name that branch. ' +
+        'Choose "selected branches" and pick your own.',
+    );
+  }
+
+  const foreign = branchIds.map(Number).filter((id) => id !== scope);
+  if (foreign.length || !branchIds.length) {
+    throw ApiError.forbidden('You can only publish offers for your own branch');
+  }
+}
+
 async function assertBranchesBelongToShop(connection, shopId, branchIds) {
   if (!branchIds.length) return;
   const placeholders = branchIds.map(() => '?').join(',');
@@ -601,6 +629,8 @@ async function create(payload, user) {
     [payload.shopId],
   );
   if (!shop) throw ApiError.badRequest('Shop not found');
+
+  assertTargetsOwnBranch(user, payload.shopId, payload.applicabilityType, payload.branchIds);
 
   const allowance = await assertPublishingAllowed(payload.shopId, payload, { isNew: true });
 
@@ -746,6 +776,8 @@ async function update(offerId, payload, user, previous) {
   const keepStatus = ['deactivated', 'draft'].includes(previous.status)
     ? previous.status
     : resolveStatus(payload.status === 'draft' ? previous.status : payload.status, payload.startDate, payload.endDate);
+
+  assertTargetsOwnBranch(user, previous.shop_id, payload.applicabilityType, payload.branchIds);
 
   // The same gate as create: editing must not be the way round it.
   if (keepStatus !== 'draft' && previous.status === 'draft') {

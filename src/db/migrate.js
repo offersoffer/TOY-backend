@@ -414,6 +414,17 @@ const COLUMN_PATCHES = [
   // readiness rule in `services/branchReadiness.js` decides when their absence
   // matters, and it only ever blocks *new* publishing, so backfilling these
   // would be inventing contact details nobody gave us.
+  // Confinement to a branch, stated rather than inferred. Defaulting to 0 is
+  // the whole point: `branch_id` has meant "works here" for longer than it has
+  // meant anything about permissions, and reading existing rows as confined
+  // would strip shop-wide powers from every member attached to a branch.
+  {
+    table: 'shop_members',
+    column: 'is_branch_restricted',
+    sql: `ALTER TABLE shop_members ADD COLUMN is_branch_restricted TINYINT(1) NOT NULL DEFAULT 0
+            AFTER branch_id`,
+  },
+
   {
     table: 'shop_branches',
     column: 'contact_person_name',
