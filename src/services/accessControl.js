@@ -215,6 +215,36 @@ function mayActOnBranch(access, shopId, branchId) {
   return Number(branchId) === scope;
 }
 
+/**
+ * Every branch confinement that applies to `permission`, keyed by shop id.
+ *
+ * `shopScopeFor` answers "which shops"; this answers "and within which of them
+ * is the caller stuck in one branch". The two are read together by any listing
+ * that spans shops, because confinement is per membership: the same person can
+ * run the whole of one shop and a single branch of another.
+ *
+ * An empty map means nobody is confined anywhere, which is the answer for a
+ * Super Admin, for a holder of the permission globally - a global grant is
+ * wider than any membership, exactly as `shopScopeFor` already treats it - and
+ * for the ordinary case of a shop-level member.
+ *
+ * @returns {Map<number, number>} shop id -> the one branch allowed there
+ */
+function branchScopesFor(access, permission) {
+  const scopes = new Map();
+  if (!access || access.isSuperAdmin) return scopes;
+  if (hasGlobalPermission(access, permission)) return scopes;
+
+  for (const shop of access.shops) {
+    if (!shop.permissions.includes(permission)) continue;
+    // Same rule as `branchScopeFor`: attachment is not confinement, and a row
+    // claiming confinement without a branch confines nobody.
+    if (!shop.branchRestricted || shop.branchId === null) continue;
+    scopes.set(shop.shopId, shop.branchId);
+  }
+  return scopes;
+}
+
 /** True when the permission is held anywhere - globally or for at least one shop. */
 function hasAnyPermission(access, permission) {
   if (!access) return false;
@@ -235,5 +265,6 @@ module.exports = {
   hasAnyPermission,
   shopScopeFor,
   branchScopeFor,
+  branchScopesFor,
   mayActOnBranch,
 };

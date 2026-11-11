@@ -123,9 +123,21 @@ router.get(
     await assertPlanAllows(scope, plans.FEATURES.VISIBILITY_ANALYTICS_ADVANCED);
 
     const range = resolveRange(req.query);
+    // A branch admin gets their own branch's row in the breakdown and nobody
+    // else's; the rest of the report stays shop-wide, because an impression in
+    // a feed did not happen at a branch. See `premiumInsights`.
+    const confinedTo = accessControl
+      .branchScopesFor(req.user, 'VIEW_VISIBILITY_ANALYTICS')
+      .values()
+      .next().value ?? null;
+
     ok(res, {
       range,
-      ...(await analytics.premiumInsights(scope, range, { limit: req.query.limit })),
+      ...(await analytics.premiumInsights(scope, range, {
+        limit: req.query.limit,
+        branchId: confinedTo,
+      })),
+      branchScoped: confinedTo !== null,
     });
   }),
 );

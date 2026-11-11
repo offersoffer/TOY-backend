@@ -426,12 +426,45 @@ const historyQuery = z.object({
   search: z.string().trim().max(120).optional(),
 });
 
+/**
+ * Narrows a claims query to the branches the caller is confined to (§16).
+ *
+ * Separate from `shopScopeClause` because the two answer different questions
+ * and a caller can be confined in one of their shops and not in another; see
+ * `claim.service.js`'s `branchScopeClause` for the rule itself.
+ */
+function branchScope(req, permission, kind) {
+  return claims.branchScopeClause(
+    accessControl.branchScopesFor(req.user, permission),
+    kind,
+  );
+}
+
 /** Builds the shared WHERE for the history and claims lists. */
 function historyWhere(req, permission, extra = []) {
   const scope = shopScopeClause(req.user, permission, req.query.shopId);
   const shape = shapeFor(req.query.kind);
   const where = [scope.sql, ...extra];
   const params = [...scope.params];
+
+  const branch = branchScope(req, permission, req.query.kind);
+  if (branch) {
+    where.push(branch.sql);
+    params.push(...branch.params);
+  }
+
+  // A branch admin asking for another branch of a shop they are confined in is
+  // told so, rather than handed an empty list they would read as a quiet week.
+  // Without a shop id there is nothing to match the branch against, so that
+  // case falls through to the scope clause above and simply returns nothing.
+  if (req.query.branchId && req.query.shopId) {
+    const allowed = accessControl
+      .branchScopesFor(req.user, permission)
+      .get(Number(req.query.shopId));
+    if (allowed !== undefined && Number(req.query.branchId) !== allowed) {
+      throw ApiError.forbidden('You can only view claims for your own branch');
+    }
+  }
 
   if (req.query.branchId) {
     where.push('c.branch_id = ?');
@@ -513,6 +546,10 @@ router.get(
     // coupon walked through the same door as one redeeming a product coupon.
     const totals = { claims_today: 0, redemptions_today: 0, pending: 0, claims_total: 0, redemptions_total: 0 };
     for (const descriptor of Object.values(claims.KINDS)) {
+      // The branch clause is per kind, because where a claim's branch rule
+      // lives differs between them - and this query has no joins to lean on,
+      // which is why that fragment is written to be self-contained.
+      const branch = branchScope(req, 'VIEW_CLAIMS', descriptor.key);
       const row = await queryOne(
         `SELECT
            SUM(DATE(c.claimed_at) = CURDATE())                  AS claims_today,
@@ -520,14 +557,29 @@ router.get(
            SUM(c.status = 'claimed' AND c.expires_at >= NOW())  AS pending,
            COUNT(*)                                             AS claims_total,
            SUM(c.redeemed_at IS NOT NULL)                       AS redemptions_total
-         FROM ${descriptor.claimsTable} c WHERE ${scope.sql}`,
-        scope.params,
+         FROM ${descriptor.claimsTable} c
+          WHERE ${scope.sql}${branch ? ` AND ${branch.sql}` : ''}`,
+        [...scope.params, ...(branch ? branch.params : [])],
       );
       for (const key of Object.keys(totals)) totals[key] += Number(row?.[key] ?? 0);
     }
 
     const claimsTotal = totals.claims_total;
     const redemptionsTotal = totals.redemptions_total;
+
+    /**
+     * A branch admin's claim counts and their redemption counts are not
+     * measured the same way, and cannot be.
+     *
+     * A redemption happened at one branch and says so. A claim that has not
+     * been redeemed happened at no branch at all, so it is counted at every
+     * branch that could honour it - which is the only useful answer to "what
+     * might walk in today", and which deliberately counts one shop-wide claim
+     * once per branch. Dividing the second into the first would therefore
+     * report a conversion rate that falls as a shop opens more branches, so
+     * the ratio is withheld instead of quietly misstated.
+     */
+    const confinedHere = accessControl.branchScopesFor(req.user, 'VIEW_CLAIMS').size > 0;
 
     ok(res, {
       claimsToday: totals.claims_today,
@@ -538,7 +590,16 @@ router.get(
       // §20's "Claim → Redemption". Null rather than 0 when nothing has been
       // claimed: a shop with no claims has no conversion rate, and printing
       // 0.0% would read as a failure rather than as an empty dashboard.
-      claimToRedemption: claimsTotal ? Number(((redemptionsTotal / claimsTotal) * 100).toFixed(1)) : null,
+      claimToRedemption:
+        claimsTotal && !confinedHere
+          ? Number(((redemptionsTotal / claimsTotal) * 100).toFixed(1))
+          : null,
+      /**
+       * Says out loud that these counters cover one branch, so the dashboard
+       * can label them rather than let a branch admin read a shop-wide claim
+       * count as their own footfall.
+       */
+      branchScoped: confinedHere,
     });
   }),
 );
@@ -618,6 +679,9 @@ router.get(
     if (!accessControl.hasShopPermission(req.user, claim.shop_id, 'VIEW_CLAIMS')) {
       throw ApiError.forbidden('That claim belongs to another shop');
     }
+    if (!(await claims.mayViewClaim(req.user, claim, kind, 'VIEW_CLAIMS'))) {
+      throw ApiError.forbidden('That claim belongs to another branch');
+    }
 
     const rows = await rawQuery(
       `SELECT v.id, v.action, v.reason, v.method, v.created_at,
@@ -665,6 +729,9 @@ router.post(
     if (!claim) throw ApiError.notFound('Claim not found');
     if (!accessControl.hasShopPermission(req.user, claim.shop_id, 'REVOKE_CLAIM')) {
       throw ApiError.forbidden('That claim belongs to another shop');
+    }
+    if (!(await claims.mayViewClaim(req.user, claim, kind, 'REVOKE_CLAIM'))) {
+      throw ApiError.forbidden('That claim belongs to another branch');
     }
     if (claim.status === 'revoked') throw ApiError.conflict('This claim is already revoked');
 

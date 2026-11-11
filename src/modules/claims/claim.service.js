@@ -459,6 +459,20 @@ const KINDS = {
     /** Columns in `claim_verifications` that point back at this kind. */
     verificationClaimColumn: 'claim_id',
     verificationParentColumn: 'offer_id',
+    /**
+     * Whether a claim of this kind, aliased `c`, could be redeemed at the
+     * branch `?` names. Correlated rather than joined so the same fragment
+     * works in the history queries, which already join the listing, and in
+     * `/summary`, which joins nothing at all.
+     */
+    branchReachSql: `EXISTS (
+        SELECT 1 FROM shop_branches rb
+          JOIN offers ro ON ro.id = c.offer_id
+         WHERE rb.id = ?
+           AND ((ro.applicability_type = 'shop_wide' AND rb.shop_id = ro.shop_id AND rb.status = 'active')
+             OR (ro.applicability_type = 'selected_branches'
+                 AND EXISTS (SELECT 1 FROM offer_locations rl
+                              WHERE rl.offer_id = ro.id AND rl.branch_id = rb.id))))`,
   },
   service_offer: {
     key: 'service_offer',
@@ -471,6 +485,18 @@ const KINDS = {
     locationsKey: 'service_id',
     verificationClaimColumn: 'service_claim_id',
     verificationParentColumn: 'service_offer_id',
+    // The branch rule reads from the parent service for the same reason the
+    // locations table does: the offer is a price, the service is the thing
+    // that happens somewhere.
+    branchReachSql: `EXISTS (
+        SELECT 1 FROM shop_branches rb
+          JOIN service_offers rso ON rso.id = c.service_offer_id
+          JOIN services rsv ON rsv.id = rso.service_id
+         WHERE rb.id = ?
+           AND ((rsv.applicability_type = 'shop_wide' AND rb.shop_id = rsv.shop_id AND rb.status = 'active')
+             OR (rsv.applicability_type = 'selected_branches'
+                 AND EXISTS (SELECT 1 FROM service_locations rl
+                              WHERE rl.service_id = rsv.id AND rl.branch_id = rb.id))))`,
   },
 };
 
@@ -571,6 +597,98 @@ function resolveBranch(actor, shopId, requestedBranchId) {
     throw ApiError.forbidden('You can only redeem claims at your own branch');
   }
   return requested;
+}
+
+// ---------------------------------------------------------------------------
+// What a branch admin may see
+// ---------------------------------------------------------------------------
+
+/**
+ * Which claims belong to one branch, for a member confined to it.
+ *
+ * `offer_claims.branch_id` is filled in *at redemption*, so a claim's branch
+ * is only a fact once somebody has honoured it. Before that the claim has no
+ * branch at all, and refusing to show it would be worse than useless: the
+ * shopkeeper looking a code up is standing at the counter the customer just
+ * walked into. So two cases, and the second is the one that matters in
+ * practice:
+ *
+ *   - redeemed here, which is the branch's own record of what it served; and
+ *   - not yet redeemed, and redeemable here - the same `shop_wide` /
+ *     `selected_branches` rule `allowedBranchIds` applies at the till.
+ *
+ * A claim redeemed at another branch therefore disappears from this branch's
+ * list the moment it is redeemed, which is correct: it is now somebody else's
+ * record. A claim for an `online` listing never appears, because no counter
+ * can serve it.
+ */
+function branchVisibilityClause(branchId, kind = 'offer') {
+  const descriptor = kindOf(kind);
+  const branch = Number(branchId);
+  return {
+    sql: `(c.branch_id = ? OR (c.branch_id IS NULL AND ${descriptor.branchReachSql}))`,
+    params: [branch, branch],
+  };
+}
+
+/**
+ * Narrows a claims query to what the caller's branch confinements allow,
+ * leaving the shops they are not confined in alone.
+ *
+ * Confinement is per membership, so this cannot be a single branch id: the
+ * same person may run the whole of one shop and one branch of another, and a
+ * list that spans both must apply the restriction only where it exists. Hence
+ * the shape - every row either belongs to an unconfined shop, or belongs to a
+ * confined one *and* passes that shop's branch test.
+ *
+ * Returns null when nothing is confined, so callers can skip the clause
+ * entirely rather than paste `1 = 1` into every query.
+ *
+ * @param {Map<number, number>} scopes from `accessControl.branchScopesFor`
+ */
+function branchScopeClause(scopes, kind = 'offer') {
+  if (!scopes || scopes.size === 0) return null;
+
+  const shopIds = [...scopes.keys()];
+  const parts = [`c.shop_id NOT IN (${shopIds.map(() => '?').join(',')})`];
+  const params = [...shopIds];
+
+  for (const [shopId, branchId] of scopes) {
+    const branch = branchVisibilityClause(branchId, kind);
+    parts.push(`(c.shop_id = ? AND ${branch.sql})`);
+    params.push(shopId, ...branch.params);
+  }
+
+  return { sql: `(${parts.join(' OR ')})`, params };
+}
+
+/**
+ * The same question asked about one claim already loaded, for the endpoints
+ * that fetch by id rather than list.
+ *
+ * Deliberately routed through `allowedBranchIds` instead of repeating the
+ * rule: that function is what the till itself uses, so a branch admin can see
+ * exactly the claims their counter could be asked to honour, and the two can
+ * never drift apart.
+ *
+ * `permission` is read through `branchScopesFor` rather than `branchScopeFor`
+ * so this agrees with the list filter in every case, the holder of a global
+ * grant included. The alternative - a claim that appears in the list and then
+ * 403s when opened - is the kind of disagreement nobody debugs twice.
+ */
+async function mayViewClaim(actor, claim, kind = 'offer', permission = 'VIEW_CLAIMS') {
+  const scope = accessControl.branchScopesFor(actor, permission).get(Number(claim.shop_id));
+  if (scope === undefined) return true;
+  if (claim.branch_id !== null && claim.branch_id !== undefined) {
+    return Number(claim.branch_id) === scope;
+  }
+  const branches = await allowedBranchIds({
+    kind,
+    shopId: claim.shop_id,
+    applicabilityType: claim.applicability_type,
+    locationParentId: claim.location_parent_id,
+  });
+  return branches.includes(scope);
 }
 
 // ---------------------------------------------------------------------------
@@ -718,6 +836,9 @@ module.exports = {
   allowedBranchIds,
   evaluate,
   resolveBranch,
+  branchVisibilityClause,
+  branchScopeClause,
+  mayViewClaim,
   logVerification,
   assertNotRateLimited,
   failureBudget,

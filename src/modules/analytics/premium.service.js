@@ -36,6 +36,28 @@ function shopClause(shopIds, column = 'o.shop_id') {
  * Branch filtering follows the offer's applicability rules rather than a plain
  * column, so a shop-wide offer still counts towards every branch it reaches.
  */
+/**
+ * The branch predicate on its own, for the queries that want it without the
+ * rest of §27's filters.
+ *
+ * An offer counts towards a branch when it *runs* there, so a shop-wide offer
+ * counts towards every branch of its shop. That is the same rule the till
+ * applies, and the reason this is not a plain `branch_id` column comparison.
+ */
+function branchFilter(filters = {}) {
+  if (!filters.branchId) return { sql: '', params: [] };
+  return {
+    sql: `
+      AND EXISTS (SELECT 1 FROM shop_branches fb
+                   WHERE fb.id = ?
+                     AND ((o.applicability_type = 'shop_wide' AND fb.shop_id = o.shop_id)
+                       OR (o.applicability_type = 'selected_branches'
+                           AND EXISTS (SELECT 1 FROM offer_locations fol
+                                        WHERE fol.offer_id = o.id AND fol.branch_id = fb.id))))`,
+    params: [filters.branchId],
+  };
+}
+
 function offerFilters(filters = {}) {
   const sql = [];
   const params = [];
@@ -60,15 +82,10 @@ function offerFilters(filters = {}) {
     sql.push(' AND o.status = ?');
     params.push(filters.status);
   }
-  if (filters.branchId) {
-    sql.push(`
-      AND EXISTS (SELECT 1 FROM shop_branches fb
-                   WHERE fb.id = ?
-                     AND ((o.applicability_type = 'shop_wide' AND fb.shop_id = o.shop_id)
-                       OR (o.applicability_type = 'selected_branches'
-                           AND EXISTS (SELECT 1 FROM offer_locations fol
-                                        WHERE fol.offer_id = o.id AND fol.branch_id = fb.id))))`);
-    params.push(filters.branchId);
+  const branch = branchFilter(filters);
+  if (branch.sql) {
+    sql.push(branch.sql);
+    params.push(...branch.params);
   }
   if (filters.campaignId) {
     sql.push(' AND EXISTS (SELECT 1 FROM campaign_offers co WHERE co.offer_id = o.id AND co.campaign_id = ?)');
@@ -754,6 +771,15 @@ async function branchPerformance(context) {
   const { from, to } = context.range;
   const window = [from, to];
 
+  // §27's `branchId` filter, which this dashboard is the one place that has to
+  // apply to the rows themselves rather than to the offers behind them. It is
+  // also what confines a branch admin here: `resolveContext` sets the filter
+  // for them, so without this they would be shown every sibling branch's
+  // takings beside their own.
+  const only = context.filters?.branchId
+    ? { sql: ' AND b.id = ?', params: [Number(context.filters.branchId)] }
+    : { sql: '', params: [] };
+
   const rows = await rawQuery(
     `SELECT b.id, b.branch_name, b.city, b.is_primary,
             COALESCE(v.views, 0)         AS views,
@@ -780,9 +806,9 @@ async function branchPerformance(context) {
           WHERE c.branch_id IS NOT NULL AND c.claimed_at BETWEEN ? AND ?
           GROUP BY c.branch_id
        ) c ON c.branch_id = b.id
-      WHERE b.status = 'active'${branchScope.sql}
+      WHERE b.status = 'active'${branchScope.sql}${only.sql}
       ORDER BY views DESC, b.is_primary DESC`,
-    [...window, ...window, ...branchScope.params],
+    [...window, ...window, ...branchScope.params, ...only.params],
   );
 
   // Top offer per branch, resolved in one pass rather than per row.
@@ -1207,7 +1233,13 @@ async function campaignPerformance(context) {
 async function offerComparison(context, offerIds) {
   if (!offerIds.length) return { range: context.range, offers: [], best: null, metrics: [] };
 
-  const scope = shopClause(context.shopIds);
+  // Shop scope alone is not enough here: the offers are named by the caller,
+  // so a branch admin could list ids belonging to a sibling branch. Only the
+  // branch predicate is added - the rest of §27's filters are deliberately
+  // left out, because the caller has already said which offers to compare.
+  const shops = shopClause(context.shopIds);
+  const branch = branchFilter(context.filters);
+  const scope = { sql: shops.sql + branch.sql, params: [...shops.params, ...branch.params] };
   const { from, to } = context.range;
   const window = [from, to];
 

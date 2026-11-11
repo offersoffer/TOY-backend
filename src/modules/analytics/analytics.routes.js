@@ -2,7 +2,7 @@
 
 const express = require('express');
 const { z } = require('zod');
-const { query, queryOne, rawQuery } = require('../../db/pool');
+const { queryOne, rawQuery } = require('../../db/pool');
 const ApiError = require('../../utils/ApiError');
 const validate = require('../../middleware/validate');
 const asyncHandler = require('../../utils/asyncHandler');
@@ -68,6 +68,98 @@ function scopeClause(scope, column = 'o.shop_id') {
   return { sql: ` AND ${column} IN (${scope.map(() => '?').join(',')})`, params: scope };
 }
 
+/**
+ * The extra narrowing a branch-confined member gets, for a query with `offers`
+ * aliased `o`.
+ *
+ * The unit is the *offer*, not the event. A branch admin's analytics cover the
+ * offers that run at their branch - every shop-wide offer, plus the ones that
+ * name them - because that is a question with a true answer. "Views at my
+ * branch" mostly is not: a shop-wide offer seen in a feed was not seen at a
+ * branch, and `offer_views.branch_id` is null for most of them, so filtering
+ * on it would report a quiet branch rather than an unanswerable question.
+ *
+ * What that means for the numbers is said out loud in the response, via
+ * `branchScope` - a shop-wide offer contributes its shop-wide counters, and a
+ * dashboard that printed them as one branch's footfall would be lying.
+ */
+function branchOfferClause(user) {
+  const scopes = accessControl.branchScopesFor(user, 'VIEW_ANALYTICS');
+  if (scopes.size === 0) return { sql: '', params: [] };
+
+  const shopIds = [...scopes.keys()];
+  const parts = [`o.shop_id NOT IN (${shopIds.map(() => '?').join(',')})`];
+  const params = [...shopIds];
+
+  for (const [shopId, branchId] of scopes) {
+    parts.push(`(o.shop_id = ? AND EXISTS (
+        SELECT 1 FROM shop_branches ab
+         WHERE ab.id = ? AND ab.shop_id = o.shop_id
+           AND (o.applicability_type = 'shop_wide'
+             OR (o.applicability_type = 'selected_branches'
+                 AND EXISTS (SELECT 1 FROM offer_locations al
+                              WHERE al.offer_id = o.id AND al.branch_id = ab.id)))))`);
+    params.push(shopId, branchId);
+  }
+
+  return { sql: ` AND (${parts.join(' OR ')})`, params };
+}
+
+/**
+ * The same confinement, for a query over `shop_branches` aliased `b`: a branch
+ * admin is shown their own branch row and no sibling's.
+ */
+function branchRowClause(user, alias = 'b') {
+  const scopes = accessControl.branchScopesFor(user, 'VIEW_ANALYTICS');
+  if (scopes.size === 0) return { sql: '', params: [] };
+
+  const shopIds = [...scopes.keys()];
+  const parts = [`${alias}.shop_id NOT IN (${shopIds.map(() => '?').join(',')})`];
+  const params = [...shopIds];
+
+  for (const [shopId, branchId] of scopes) {
+    parts.push(`(${alias}.shop_id = ? AND ${alias}.id = ?)`);
+    params.push(shopId, branchId);
+  }
+  return { sql: ` AND (${parts.join(' OR ')})`, params };
+}
+
+/** Shop scope and branch confinement together, for the `offers o` queries. */
+function offerScopeClause(user, scope) {
+  const shop = scopeClause(scope);
+  const branch = branchOfferClause(user);
+  return { sql: shop.sql + branch.sql, params: [...shop.params, ...branch.params] };
+}
+
+/**
+ * What the response says about its own scope, so a client can label figures
+ * that cover one branch - and never present a shop-wide counter as a branch's.
+ */
+async function branchScopeOf(user) {
+  const scopes = accessControl.branchScopesFor(user, 'VIEW_ANALYTICS');
+  if (scopes.size === 0) return null;
+
+  const ids = [...scopes.values()];
+  const rows = await rawQuery(
+    `SELECT id, branch_name FROM shop_branches WHERE id IN (${ids.map(() => '?').join(',')})`,
+    ids,
+  );
+  return {
+    branches: rows.map((row) => ({ id: Number(row.id), name: row.branch_name })),
+    /**
+     * Which figures are the branch's own and which are the whole shop's. The
+     * offer *set* is the branch's; the per-offer counters behind the
+     * engagement totals are not, because a shop-wide offer has one view count
+     * for the shop.
+     */
+    offerSet: 'branch',
+    counters: 'shop',
+    note:
+      'Covers the offers that run at your branch. A shop-wide offer contributes '
+      + 'the whole shop\'s views, clicks and saves, because those are not recorded per branch.',
+  };
+}
+
 // ---- V3 --------------------------------------------------------------------
 // Both sub-routers carry their own authentication: event ingest is open to
 // signed-out customers, and the premium dashboards add a subscription gate on
@@ -85,7 +177,7 @@ router.get(
   validate({ query: rangeQuery }),
   asyncHandler(async (req, res) => {
     const scope = analyticsScope(req.user, req.query.shopId);
-    const offerScope = scopeClause(scope);
+    const offerScope = offerScopeClause(req.user, scope);
 
     const offerCounts = await rawQuery(
       `SELECT status, COUNT(*) AS count FROM offers o
@@ -135,6 +227,7 @@ router.get(
         claims: Number(claimTotals[0].claims),
         redemptions: Number(claimTotals[0].redemptions ?? 0),
       },
+      branchScope: await branchScopeOf(req.user),
     };
 
     if (scope === null) {
@@ -192,7 +285,7 @@ router.get(
   validate({ query: rangeQuery }),
   asyncHandler(async (req, res) => {
     const scope = analyticsScope(req.user, req.query.shopId);
-    const offerScope = scopeClause(scope);
+    const offerScope = offerScopeClause(req.user, scope);
     const days = req.query.days;
     const limit = req.query.limit;
 
@@ -287,15 +380,24 @@ router.get(
     const shop = await queryOne('SELECT id, name FROM shops WHERE id = ?', [shopId]);
     if (!shop) throw ApiError.notFound('Shop not found');
 
+    // The offer queries below gain the confinement clause, and `offers` is
+    // aliased `o` for that reason - the clause is written against that alias.
+    const offerBranch = branchOfferClause(req.user);
+    const branchRows = branchRowClause(req.user);
+
     const [statuses, engagement, branchPerformance, topOffers] = await Promise.all([
-      query('SELECT status, COUNT(*) AS count FROM offers WHERE shop_id = ? GROUP BY status', [shopId]),
-      queryOne(
-        `SELECT COALESCE(SUM(view_count), 0) AS views, COALESCE(SUM(click_count), 0) AS clicks,
-                COALESCE(SUM(favorite_count), 0) AS favorites
-           FROM offers WHERE shop_id = ?`,
-        [shopId],
+      rawQuery(
+        `SELECT o.status, COUNT(*) AS count FROM offers o
+          WHERE o.shop_id = ?${offerBranch.sql} GROUP BY o.status`,
+        [shopId, ...offerBranch.params],
       ),
-      query(
+      queryOne(
+        `SELECT COALESCE(SUM(o.view_count), 0) AS views, COALESCE(SUM(o.click_count), 0) AS clicks,
+                COALESCE(SUM(o.favorite_count), 0) AS favorites
+           FROM offers o WHERE o.shop_id = ?${offerBranch.sql}`,
+        [shopId, ...offerBranch.params],
+      ),
+      rawQuery(
         `SELECT b.id, b.branch_name, b.city,
                 (SELECT COUNT(*) FROM offers o
                   WHERE o.shop_id = b.shop_id AND o.status = 'active'
@@ -303,14 +405,15 @@ router.get(
                       OR EXISTS (SELECT 1 FROM offer_locations ol
                                   WHERE ol.offer_id = o.id AND ol.branch_id = b.id))) AS active_offers,
                 (SELECT COUNT(*) FROM offer_views v WHERE v.branch_id = b.id AND v.event_type = 'view') AS views
-           FROM shop_branches b WHERE b.shop_id = ? ORDER BY b.is_primary DESC, b.branch_name`,
-        [shopId],
+           FROM shop_branches b WHERE b.shop_id = ?${branchRows.sql}
+          ORDER BY b.is_primary DESC, b.branch_name`,
+        [shopId, ...branchRows.params],
       ),
-      query(
+      rawQuery(
         `SELECT o.id, o.title, o.view_count, o.click_count, o.favorite_count, s.name AS shop_name
            FROM offers o JOIN shops s ON s.id = o.shop_id
-          WHERE o.shop_id = ? ORDER BY o.view_count DESC LIMIT 10`,
-        [shopId],
+          WHERE o.shop_id = ?${offerBranch.sql} ORDER BY o.view_count DESC LIMIT 10`,
+        [shopId, ...offerBranch.params],
       ),
     ]);
 
@@ -338,6 +441,7 @@ router.get(
         views: Number(row.views),
       })),
       mostViewed: topOffers.map(mapOfferStat),
+      branchScope: await branchScopeOf(req.user),
     });
   }),
 );
@@ -348,7 +452,7 @@ router.get(
   validate({ query: rangeQuery }),
   asyncHandler(async (req, res) => {
     const scope = analyticsScope(req.user, req.query.shopId);
-    const offerScope = scopeClause(scope);
+    const offerScope = offerScopeClause(req.user, scope);
 
     const rows = await rawQuery(
       `SELECT c.id, c.name,
@@ -382,7 +486,9 @@ router.get(
   validate({ query: rangeQuery }),
   asyncHandler(async (req, res) => {
     const scope = analyticsScope(req.user, req.query.shopId);
-    const scoped = scopeClause(scope, 'b.shop_id');
+    const shops = scopeClause(scope, 'b.shop_id');
+    const branch = branchRowClause(req.user);
+    const scoped = { sql: shops.sql + branch.sql, params: [...shops.params, ...branch.params] };
 
     const rows = await rawQuery(
       // Grouped by city alone. Branches of the same city do not always agree on
@@ -465,7 +571,7 @@ router.get(
   validate({ query: rangeQuery }),
   asyncHandler(async (req, res) => {
     const scope = analyticsScope(req.user, req.query.shopId);
-    const offerScope = scopeClause(scope);
+    const offerScope = offerScopeClause(req.user, scope);
     const { from, to } = resolveRange(req.query);
     const window = [from, to];
 

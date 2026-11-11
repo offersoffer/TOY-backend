@@ -298,6 +298,13 @@ async function branchPerformance(context) {
   const scope = serviceScope(context);
   const { from, to } = context.range;
 
+  // The one dashboard where `branchId` has to narrow the rows rather than the
+  // services behind them - and so the one place a branch admin would
+  // otherwise be shown every sibling branch beside their own.
+  const only = context.filters?.branchId
+    ? { sql: ' AND b.id = ?', params: [Number(context.filters.branchId)] }
+    : { sql: '', params: [] };
+
   const rows = await rawQuery(
     `SELECT b.id, b.branch_name, b.city,
             (SELECT COUNT(*) FROM analytics_events e JOIN services sv2 ON sv2.id = e.service_id
@@ -307,9 +314,9 @@ async function branchPerformance(context) {
             (SELECT COUNT(*) FROM service_offer_claims c WHERE c.branch_id = b.id AND c.claimed_at BETWEEN ? AND ?) AS claims
        FROM shop_branches b
        JOIN services sv ON sv.shop_id = b.shop_id
-      WHERE b.status = 'active'${scope.sql}
+      WHERE b.status = 'active'${scope.sql}${only.sql}
       GROUP BY b.id, b.branch_name, b.city`,
-    [from, to, from, to, from, to, ...scope.params],
+    [from, to, from, to, from, to, ...scope.params, ...only.params],
   );
 
   return rows.map((row) => ({

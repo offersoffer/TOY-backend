@@ -540,19 +540,34 @@ async function merchantDashboard(shopIds, range) {
  * event stream - which is the point: §16 is not a different dataset, it is
  * permission to cut the same one more finely.
  */
-async function premiumInsights(shopIds, range, { limit = 10 } = {}) {
+async function premiumInsights(shopIds, range, { limit = 10, branchId = null } = {}) {
   const scope = scopeClause(shopIds);
   const params = [range.from, range.to, ...scope.params];
   const impressionFilter = "event_type IN ('IMPRESSION','FEATURED_IMPRESSION')";
+
+  /**
+   * The branch breakdown is the only part of this report that names a branch,
+   * and so the only part a branch admin must not be given whole.
+   *
+   * The rest of the report is deliberately left shop-wide. Visibility is a
+   * discovery measure - where a listing appeared in a feed, and how high -
+   * which is a fact about the shop's listings, not about any counter.
+   * `visibility_events.branch_id` is null for most impressions precisely
+   * because of that, so filtering the whole report on it would report a dead
+   * branch instead of admitting the question does not apply.
+   */
+  const onlyBranch = branchId
+    ? { sql: ' AND branch_id = ?', params: [Number(branchId)] }
+    : { sql: '', params: [] };
 
   const [byBranch, byLocation, byOffer, byDay, byHour, byWeekday, searchTerms] = await Promise.all([
     rawQuery(
       `SELECT branch_id, COUNT(*) AS impressions, COUNT(DISTINCT user_id) AS customers
          FROM visibility_events
         WHERE created_at BETWEEN ? AND ? AND is_suspicious = 0 AND branch_id IS NOT NULL
-          AND ${impressionFilter}${scope.sql}
+          AND ${impressionFilter}${scope.sql}${onlyBranch.sql}
         GROUP BY branch_id ORDER BY impressions DESC LIMIT ${Number.parseInt(limit, 10)}`,
-      params,
+      [...params, ...onlyBranch.params],
     ),
     rawQuery(
       `SELECT city, COUNT(*) AS impressions, COUNT(DISTINCT user_id) AS customers

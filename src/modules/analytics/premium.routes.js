@@ -10,6 +10,7 @@ const asyncHandler = require('../../utils/asyncHandler');
 const { authenticate } = require('../../middleware/auth');
 const { requirePermission } = require('../../middleware/authorize');
 const accessControl = require('../../services/accessControl');
+const branchScope = require('../../services/branchScope');
 const entitlements = require('../../services/entitlements');
 const subscriptions = require('../subscriptions/subscription.service');
 const plans = require('../../config/plans');
@@ -85,10 +86,17 @@ async function resolveContext(req, feature) {
     throw entitlements.featureRefusal(feature, null);
   }
 
+  const filters = filtersFrom(req.query);
+  // A branch admin does not choose the branch filter; it is chosen for them,
+  // and a request naming another branch is refused rather than quietly
+  // answered about their own.
+  const branchId = branchScope.confineFilters(req.user, entitled, filters, 'VIEW_ANALYTICS');
+
   return {
     shopIds: entitled,
     range: resolvePresetRange(req.query),
-    filters: filtersFrom(req.query),
+    filters,
+    confinedToBranch: branchId,
     plan: await subscriptions.planKeyForShop(entitled[0]),
   };
 }
