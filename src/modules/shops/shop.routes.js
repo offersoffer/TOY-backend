@@ -9,6 +9,7 @@ const { authenticate, optionalAuth } = require('../../middleware/auth');
 const {
   requireGlobalPermission,
   requireShopScope,
+  requireBranchScope,
   loadShop,
 } = require('../../middleware/authorize');
 
@@ -53,6 +54,9 @@ router.post(
   authenticate,
   validate({ params: schema.idParam, body: schema.branchBody }),
   requireShopScope('MANAGE_LOCATIONS', 'id'),
+  // No branch in the URL, so a confined caller is refused outright: adding a
+  // branch is a shop-level act, not something one branch does.
+  requireBranchScope('MANAGE_LOCATIONS'),
   asyncHandler(controller.createBranch),
 );
 
@@ -61,6 +65,7 @@ router.put(
   authenticate,
   validate({ params: schema.branchParams, body: schema.updateBranchSchema }),
   requireShopScope('MANAGE_LOCATIONS', 'id'),
+  requireBranchScope('MANAGE_LOCATIONS'),
   asyncHandler(controller.updateBranch),
 );
 
@@ -69,6 +74,7 @@ router.delete(
   authenticate,
   validate({ params: schema.branchParams }),
   requireShopScope('MANAGE_LOCATIONS', 'id'),
+  requireBranchScope('MANAGE_LOCATIONS'),
   asyncHandler(controller.deactivateBranch),
 );
 

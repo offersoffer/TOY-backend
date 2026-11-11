@@ -58,7 +58,12 @@ exports.remove = async (req, res) => {
 exports.listBranches = async (req, res) => {
   // Staff see deactivated branches too; customers only see live ones.
   const includeInactive = accessControl.hasShopPermission(req.user, req.params.id, 'MANAGE_LOCATIONS');
-  ok(res, await service.listBranches(req.params.id, { includeInactive }));
+  // A branch admin sees their own branch and no sibling's. Undefined - nobody
+  // confined - becomes null, which the service reads as "every branch", and
+  // is what a customer and a shop owner both get.
+  const branchScope =
+    accessControl.branchScopesFor(req.user, 'MANAGE_LOCATIONS').get(Number(req.params.id)) ?? null;
+  ok(res, await service.listBranches(req.params.id, { includeInactive, branchScope }));
 };
 
 exports.createBranch = async (req, res) => {

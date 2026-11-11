@@ -54,6 +54,36 @@ const requireShopScope = (permission, param = 'shopId') => (req, _res, next) => 
 };
 
 /**
+ * Keeps a branch admin out of their siblings' branches.
+ *
+ * `requireShopScope` answers "may you touch this shop", which for a branch
+ * admin is yes - they run part of it. It does not answer "which branch", and
+ * for a write that is the question that matters: editing another branch's
+ * address or deactivating it is a good deal more consequential than reading
+ * its figures, which is already refused elsewhere.
+ *
+ * `param` names the branch in the URL. A route with no branch in it - adding
+ * one - is refused outright for a confined caller, because a new branch is a
+ * shop-level act and a branch admin has no branch of their own to add it to.
+ */
+const requireBranchScope = (permission, param = 'branchId') => (req, _res, next) => {
+  if (!req.user) return next(ApiError.unauthorized());
+
+  const shopId = req.params.id ?? req.params.shopId ?? req.shopId;
+  const scope = access.branchScopesFor(req.user, permission).get(Number(shopId));
+  if (scope === undefined) return next();
+
+  const branchId = req.params[param];
+  if (branchId === undefined) {
+    return next(ApiError.forbidden('You run one branch, so you cannot add another to this shop'));
+  }
+  if (Number(branchId) !== scope) {
+    return next(ApiError.forbidden('That branch is not yours'));
+  }
+  next();
+};
+
+/**
  * Loads the offer named by `:id` and checks the caller may write to it.
  * Puts the row on `req.offer` so handlers do not re-query.
  */
@@ -153,6 +183,7 @@ module.exports = {
   requireGlobalPermission,
   requireSuperAdmin,
   requireShopScope,
+  requireBranchScope,
   loadOfferForWrite,
   loadServiceForWrite,
   loadServiceOfferForWrite,

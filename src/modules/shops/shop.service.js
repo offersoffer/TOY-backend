@@ -277,7 +277,7 @@ async function getById(idOrSlug, user, position = null) {
   );
 
   const shop = mapShop(row);
-  shop.branches = branches.map(mapBranch);
+  shop.branches = branches.map((branch) => mapBranch(branch, { forManager: canSeeInactive }));
   shop.rating = { count: Number(rating.count), average: rating.average === null ? null : Number(rating.average) };
 
   // §17's completion panel is for whoever runs the shop. A customer looking at
@@ -291,8 +291,19 @@ async function getById(idOrSlug, user, position = null) {
   return shop;
 }
 
-function mapBranch(row) {
-  return {
+/**
+ * Shapes a branch for the API.
+ *
+ * `forManager` is what decides whether the publish gate's working is shown.
+ * It is the same judgement `shop.profile` already makes a few lines below: a
+ * customer looking at a shop page has no use for "this branch has not named a
+ * contact person yet", and which of a merchant's locations are half-finished
+ * is nobody else's business. Both the public shop page and
+ * `GET /shops/:id/branches` are reachable without signing in, so this has to
+ * be opt-in rather than opt-out.
+ */
+function mapBranch(row, { forManager = false } = {}) {
+  const branch = {
     id: Number(row.id),
     shopId: Number(row.shop_id),
     branchName: row.branch_name,
@@ -318,11 +329,6 @@ function mapBranch(row) {
     contactPersonEmail: row.contact_person_email ?? null,
     isPrimary: Boolean(row.is_primary),
     status: row.status,
-    // What the merchant still owes before offers can go live here. Served with
-    // the branch so a dashboard can say which branch needs attention without
-    // re-deriving the rule in two clients.
-    publishBlockers: branchReadiness.missingFor(row),
-    readyToPublish: branchReadiness.isReady(row),
     offerCount: row.offer_count === undefined ? undefined : Number(row.offer_count),
     distanceKm:
       row.distance_km === null || row.distance_km === undefined
@@ -331,6 +337,17 @@ function mapBranch(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+
+  if (forManager) {
+    // What the merchant still owes before offers can go live here (§18).
+    // Served with the branch so a dashboard can say which branch needs
+    // attention without re-deriving the rule in two clients - a copy of it on
+    // a phone would be the copy that goes stale behind a store release.
+    branch.publishBlockers = branchReadiness.missingFor(row);
+    branch.readyToPublish = branchReadiness.isReady(row);
+  }
+
+  return branch;
 }
 
 /**
@@ -851,7 +868,17 @@ async function remove(shopId) {
 // Branches (§17)
 // ---------------------------------------------------------------------------
 
-async function listBranches(shopId, { includeInactive = false } = {}) {
+/**
+ * The branches of one shop.
+ *
+ * `branchScope` confines the answer to a branch admin's own branch. That is
+ * not only tidiness: this list feeds the branch screen they manage from and
+ * the offer form's branch picker, and showing them a sibling branch they will
+ * then be refused on is worse than not offering it. `null` means every
+ * branch, which is everyone else.
+ */
+async function listBranches(shopId, { includeInactive = false, branchScope = null } = {}) {
+  const only = branchScope === null ? '' : 'AND b.id = ?';
   const rows = await query(
     `SELECT b.*,
             (SELECT COUNT(*) FROM offers o
@@ -861,11 +888,13 @@ async function listBranches(shopId, { includeInactive = false } = {}) {
                       AND EXISTS (SELECT 1 FROM offer_locations ol
                                    WHERE ol.offer_id = o.id AND ol.branch_id = b.id)))) AS offer_count
        FROM shop_branches b
-      WHERE b.shop_id = ? ${includeInactive ? '' : "AND b.status = 'active'"}
+      WHERE b.shop_id = ? ${includeInactive ? '' : "AND b.status = 'active'"} ${only}
       ORDER BY b.is_primary DESC, b.branch_name`,
-    [shopId],
+    branchScope === null ? [shopId] : [shopId, branchScope],
   );
-  return rows.map(mapBranch);
+  // `includeInactive` is already "this caller manages the shop" - the
+  // controller sets it from MANAGE_LOCATIONS - so it answers both questions.
+  return rows.map((row) => mapBranch(row, { forManager: includeInactive }));
 }
 
 async function createBranch(shopId, payload) {
@@ -886,7 +915,11 @@ async function createBranch(shopId, payload) {
     return result.insertId;
   });
 
-  return queryOne('SELECT * FROM shop_branches WHERE id = ?', [branchId]).then(mapBranch);
+  // Both of these are behind MANAGE_LOCATIONS, so the caller is the merchant
+  // and the gate's working is exactly what they came for.
+  return queryOne('SELECT * FROM shop_branches WHERE id = ?', [branchId]).then((row) =>
+    mapBranch(row, { forManager: true }),
+  );
 }
 
 async function updateBranch(shopId, branchId, payload) {
@@ -914,7 +947,11 @@ async function updateBranch(shopId, branchId, payload) {
     ]);
   });
 
-  return queryOne('SELECT * FROM shop_branches WHERE id = ?', [branchId]).then(mapBranch);
+  // Both of these are behind MANAGE_LOCATIONS, so the caller is the merchant
+  // and the gate's working is exactly what they came for.
+  return queryOne('SELECT * FROM shop_branches WHERE id = ?', [branchId]).then((row) =>
+    mapBranch(row, { forManager: true }),
+  );
 }
 
 /** Branches are deactivated rather than deleted so historic offers stay intact. */
