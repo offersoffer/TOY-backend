@@ -20,27 +20,39 @@ follows. Organization accounts are exempt. That choice is made in the first
 five minutes of signup and can cost two to three weeks. An organization needs a
 D-U-N-S number; obtaining one is usually still faster than the testing clock.
 
-**The in-app Razorpay checkout is a policy problem.** `SubscriptionScreen`
-opens a Razorpay hosted checkout for the BUSINESS and PREMIUM merchant plans.
+**The in-app Razorpay checkout was a policy problem. It has been removed.**
 Google's Payments policy has **no exemption for B2B or SaaS**: it names "cloud
 software and services" and "business productivity software" as purchases that
 *require* Play billing. The exemptions are physical goods, content consumable
 only outside a Play-distributed app, 1:1 services, tips and similar — none of
-which covers a merchant subscription.
+which covers a merchant subscription. `SubscriptionScreen` used to open a
+Razorpay hosted checkout for the BUSINESS and PREMIUM plans.
 
-Three ways out:
+Three ways out were available:
 
 | Option | Cost |
 |---|---|
-| Sell subscriptions on the web only; remove the in-app route | Smallest change. The app must not *lead* users to the other payment method at all — showing the current plan is fine, a checkout button is not. |
+| **Taken:** sell subscriptions on the web only; remove the in-app route | Smallest change. The app must not *lead* users to the other payment method at all — showing the current plan is fine, a checkout button is not, and neither is a pointer to where to pay. |
 | Adopt Google Play Billing | Largest change; Play takes its fee. |
 | India's alternative billing programme | Runs *alongside* Play billing, not instead of it. Needs enrolment, PCI DSS and 24-hour transaction reporting, for a 4% fee reduction. |
 
 The Supreme Court case on Play billing in India is unresolved and is not a safe
 basis for an exemption.
 
-Whatever is decided, **rebuild before shipping** — the current AAB still
-contains the checkout path.
+What the removal covered: the checkout call and the hosted-page redirect,
+"Continue to payment", the advertised payment methods, switching between two
+paid tiers, "retry the payment", and the "Upgrade" buttons that led to any of
+it. `startCheckout` and `verifyCheckout` were deleted from the mobile API
+client as well, so the capability is absent from the binary rather than merely
+unreachable. Verified against the exported Hermes bundle: zero occurrences of
+"razorpay" or "Continue to payment". Cancelling and moving to Free stayed —
+neither is a purchase, and a merchant must always be able to stop paying.
+
+Razorpay itself is unaffected and still sells on the web. Its own setup is a
+separate sequence: see `docs/razorpay-setup.md`, which also explains why it
+does not block this release.
+
+**versionCode 5 still contains the checkout path and must not be submitted.**
 
 ---
 
@@ -49,7 +61,10 @@ contains the checkout path.
 Verified, so do not redo:
 
 ```
-[x] Production AAB, versionCode 5, built from commit 9d1f81b (= mobile HEAD)
+[x] Production AAB, versionCode 6 — the first without the in-app checkout.
+    Built from a dirty tree (an uncommitted SelectLocationScreen fix), so it
+    is NOT reproducible from a commit; rebuild if provenance matters.
+    versionCode 5 predates the removal and must not be submitted.
 [x] https://offersoffer.in/privacy        200
 [x] https://offersoffer.in/terms          200
 [x] https://offersoffer.in/support        200
