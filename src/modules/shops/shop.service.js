@@ -477,6 +477,13 @@ function mergeBranch(payload, existing) {
     locationConfirmed: payload.locationConfirmed,
     openingHours: keep(payload.openingHours, parseJson(existing.opening_hours)),
     contactNumber: keep(payload.contactNumber, existing.contact_number),
+    // Carried, not defaulted. `branchValues` writes `?? null`, so a key
+    // missing here is not "leave it alone" - it erases the column. These two
+    // arrived with the publish gate, and omitting them wiped a branch's
+    // contact person every time a merchant saved their shop profile, because
+    // §19 routes that save through this same primary-branch upsert.
+    contactPersonName: keep(payload.contactPersonName, existing.contact_person_name),
+    contactPersonEmail: keep(payload.contactPersonEmail, existing.contact_person_email),
     isPrimary: payload.isPrimary !== undefined ? payload.isPrimary : Boolean(existing.is_primary),
     status: payload.status ?? existing.status,
   };
@@ -1098,4 +1105,12 @@ module.exports = {
   removeMember,
   mapShop,
   mapBranch,
+  /**
+   * Exported for the test that keeps the two in step: anything `branchValues`
+   * writes has to be something `mergeBranch` carries, or a partial save
+   * silently erases it. See `test/branches/branch-merge.test.js`.
+   */
+  BRANCH_COLUMNS,
+  branchValues,
+  mergeBranch,
 };

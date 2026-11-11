@@ -141,10 +141,29 @@ async function present(shop) {
 }
 
 /** Maps the wizard's address step onto the branch payload shop.service expects. */
-function branchPayloadFrom(address, shopName) {
+function branchPayloadFrom(address, shopName, contact = {}) {
   if (!address) return undefined;
   return {
     branchName: shopName,
+    /**
+     * Seeded so the gate in §18 does not block the seller's very first offer
+     * on three fields no step of this wizard asks for.
+     *
+     * A self-registering seller with one location *is* the person a customer
+     * reaches there, and they have already given a shop contact number. So the
+     * branch starts as them, and they can hand it to a manager later from the
+     * branches screen. The alternative was a seller finishing registration,
+     * being approved, writing their first offer and only then learning the
+     * problem is on a screen they have never opened.
+     *
+     * `undefined` means "leave whatever is there" to `mergeBranch`, which is
+     * why the caller decides whether to seed at all: the wizard re-saves the
+     * address whenever the seller goes back a step, and a seed that fired
+     * every time would overwrite a contact person they had since chosen.
+     */
+    contactNumber: contact.contactNumber || undefined,
+    contactPersonName: contact.personName || undefined,
+    contactPersonEmail: contact.personEmail || undefined,
     address: address.address,
     addressLine2: address.addressLine2,
     area: address.area,
@@ -159,6 +178,31 @@ function branchPayloadFrom(address, shopName) {
     locationConfirmed: address.locationConfirmed,
     isPrimary: true,
     status: 'active',
+  };
+}
+
+/**
+ * What to seed the primary branch's contact details with, or an empty seed.
+ *
+ * Only the gaps are filled, and only once: a value already on the branch is
+ * left alone, because the seller may have handed the branch to a manager and
+ * the wizard re-saves the address every time they step back through it.
+ */
+async function contactSeedFor(shopId, shop, user) {
+  const branch = await queryOne(
+    `SELECT contact_number, contact_person_name, contact_person_email
+       FROM shop_branches
+      WHERE shop_id = ?
+      ORDER BY is_primary DESC, status = 'active' DESC, id
+      LIMIT 1`,
+    [shopId],
+  );
+
+  const blank = (value) => !String(value ?? '').trim();
+  return {
+    contactNumber: !branch || blank(branch.contact_number) ? shop.contact_number : undefined,
+    personName: !branch || blank(branch.contact_person_name) ? user.name : undefined,
+    personEmail: !branch || blank(branch.contact_person_email) ? user.email : undefined,
   };
 }
 
@@ -262,7 +306,13 @@ async function update(shopId, payload, user) {
       ...(payload.socialLinks !== undefined ? { socialLinks: payload.socialLinks } : {}),
       ...(payload.categoryIds !== undefined ? { categoryIds: payload.categoryIds } : {}),
       ...(payload.address
-        ? { primaryBranch: branchPayloadFrom(payload.address, payload.name ?? shop.name) }
+        ? {
+            primaryBranch: branchPayloadFrom(
+              payload.address,
+              payload.name ?? shop.name,
+              await contactSeedFor(shopId, shop, user),
+            ),
+          }
         : {}),
       // Deliberately absent: `status`. A seller editing their draft must not
       // be able to send one, and leaving it out means the activation guard in

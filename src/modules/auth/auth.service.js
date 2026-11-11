@@ -50,6 +50,13 @@ function publicUser(user, context) {
       shopSlug: shop.shopSlug,
       shopLogoUrl: shop.shopLogoUrl,
       branchId: shop.branchId,
+      /**
+       * Whether `branchId` confines this user or merely records where they
+       * work. The clients need the difference to label a branch admin's
+       * screens honestly - and to not label a Store Manager who runs the
+       * whole shop from one of its branches as one.
+       */
+      branchRestricted: shop.branchRestricted,
       designation: shop.designation,
       roleName: shop.roleName,
       permissions: shop.permissions,
