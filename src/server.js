@@ -1,6 +1,8 @@
 'use strict';
 
 const app = require('./app');
+const cache = require('./services/cache');
+const responseCache = require('./middleware/responseCache');
 const env = require('./config/env');
 const logger = require('./utils/logger');
 const { pool, healthCheck } = require('./db/pool');
@@ -37,6 +39,20 @@ async function main() {
   });
   if (!connected) process.exit(1);
 
+  /*
+   * Load the cache's namespace counters before serving.
+   *
+   * The counters live in the cache and are mirrored in this process. A restart
+   * that did not read them back would reset the mirror to zero and start
+   * serving keys that an earlier invalidation had already retired - stale
+   * discovery payloads, with nothing to say why.
+   *
+   * Best-effort and never fatal: a cache that cannot be reached at boot leaves
+   * the counters at zero, which is safe precisely because nothing has been
+   * written under them either.
+   */
+  await cache.warmNamespaces([responseCache.NAMESPACE]);
+
   const server = app.listen(env.port, () => {
     logger.info(
       {
@@ -45,6 +61,7 @@ async function main() {
         api_prefix: env.apiPrefix,
         database: env.db.database,
         log_level: env.logging.level,
+        cache: cache.status().driver,
       },
       `OffersOffer API listening on http://localhost:${env.port}${env.apiPrefix}`,
     );

@@ -247,6 +247,33 @@ const env = {
   cache: {
     publicMaxAgeSeconds: int(process.env.CACHE_PUBLIC_MAX_AGE, 60),
     sharedMaxAgeSeconds: int(process.env.CACHE_SHARED_MAX_AGE, 300),
+
+    /**
+     * Which cache to use. `auto` - the default - means Redis when `REDIS_URL`
+     * is set and nothing otherwise, so neither development nor the test suite
+     * needs a Redis running, and production gets one by setting a single
+     * variable.
+     *
+     * `memory` is a deliberate choice rather than a fallback: it is
+     * per-process and unshared, which is harmless on a deployment that runs
+     * one API process and wrong on one that runs several.
+     */
+    driver: ['auto', 'redis', 'memory', 'none'].includes(process.env.CACHE_DRIVER)
+      ? process.env.CACHE_DRIVER
+      : 'auto',
+    redisUrl: process.env.REDIS_URL || null,
+    memoryMaxEntries: int(process.env.CACHE_MEMORY_MAX_ENTRIES, 5000),
+
+    /**
+     * How long a cached public discovery response is served for.
+     *
+     * Short on purpose. These responses are invalidated explicitly when a
+     * merchant publishes or edits, so the TTL is only the backstop for an
+     * invalidation that was lost - not the mechanism. Sixty seconds matches
+     * `CACHE_PUBLIC_MAX_AGE`, so a browser and the server agree about how
+     * stale a feed may be.
+     */
+    responseTtlSeconds: int(process.env.CACHE_RESPONSE_TTL, 60),
   },
 
   /**

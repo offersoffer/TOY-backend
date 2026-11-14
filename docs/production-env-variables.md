@@ -2,7 +2,7 @@
 
 Every variable the backend reads, what it does in production, and whether you
 have to set it. Derived from the code (`grep process.env` across `src/` and
-`scripts/`), not from memory — 85 variables, all listed.
+`scripts/`), not from memory — 89 variables, all listed.
 
 **This file contains no real values and must never contain any.** Placeholders
 are written `<...>`. Real production credentials belong in `.env.production` on
@@ -244,6 +244,18 @@ measurements.
 | `DISCOVERY_URGENT_HOURS` | Optional | `6` |
 | `CACHE_PUBLIC_MAX_AGE` | Optional | `60` |
 | `CACHE_SHARED_MAX_AGE` | Optional | `300` |
+| `REDIS_URL` | **Recommended** | — | Turns the server-side cache on. Unset means no cache, which is what the API did before it existed. |
+| `CACHE_DRIVER` | Optional | `auto` | `auto` \| `redis` \| `memory` \| `none`. `auto` is Redis when `REDIS_URL` is set and nothing otherwise. |
+| `CACHE_RESPONSE_TTL` | Optional | `60` | Seconds a cached public response is served for. The backstop, not the mechanism — writes invalidate explicitly. |
+| `CACHE_MEMORY_MAX_ENTRIES` | Optional | `5000` | Only for `CACHE_DRIVER=memory`. |
+
+`CACHE_DRIVER=memory` is per-process and unshared. It is correct on a
+deployment running **one** API process and wrong on one running several, where
+each would hold its own copy. Set `REDIS_URL` before adding a second process.
+
+Only public, anonymous `GET`s on the discovery paths are cached, decided by the
+same `isPublicPath` list that `middleware/cachePolicy.js` uses to mark a
+response `public`. `docs/caching-and-rollups.md` has the reasoning.
 
 ---
 

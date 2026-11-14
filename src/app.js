@@ -14,6 +14,15 @@ const { healthCheck } = require('./db/pool');
 const mailer = require('./utils/mailer');
 const { apiLimiter } = require('./middleware/rateLimit');
 const cachePolicy = require('./middleware/cachePolicy');
+const responseCache = require('./middleware/responseCache');
+const cache = require('./services/cache');
+
+/** `none` | `ready` | `unavailable` - deliberately no numbers; see /health. */
+const cacheHealth = () => {
+  const { driver, ready } = cache.status();
+  if (driver === 'none') return 'none';
+  return ready ? 'ready' : 'unavailable';
+};
 const requestId = require('./middleware/requestId');
 const httpLogger = require('./middleware/httpLogger');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
@@ -119,6 +128,10 @@ app.get('/health', async (_req, res) => {
       // merely that SMTP_HOST is set. `not-configured` | `unverified` |
       // `ready` | `unavailable`; see mailer.status().
       email: mailer.status(),
+      // Same level of detail as `email` above, and for the same reason: this
+      // endpoint is unauthenticated, so it says whether the cache is working,
+      // not how well it is working. Hit rates and key counts go to the logs.
+      cache: cacheHealth(),
       uptime: process.uptime(),
     },
   });
@@ -136,7 +149,18 @@ app.use(require('./modules/sitemap/sitemap.routes'));
 
 // Guest/authenticated cache separation (§26). Sits ahead of the router so it
 // applies to every API response, including error responses.
-app.use(env.apiPrefix, apiLimiter, cachePolicy, routes);
+/*
+ * Order matters here.
+ *
+ * `apiLimiter` stays in front of the cache: a cached response is still a
+ * request, and letting cache hits bypass the limiter would make the cache a
+ * way around it.
+ *
+ * `cachePolicy` stays in front too, so a replayed body carries the same
+ * `Cache-Control` and `Vary` headers a freshly computed one would - the cache
+ * stores the payload, never the headers.
+ */
+app.use(env.apiPrefix, apiLimiter, cachePolicy, responseCache, routes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

@@ -60,6 +60,40 @@ const PRIVATE_PATTERNS = [
   /^\/audit-logs/,
 ];
 
+/**
+ * Prefixes whose **writes** change what the public discovery responses say.
+ *
+ * Kept here, beside `PUBLIC_PATTERNS`, because the two are one decision read
+ * from opposite ends: this list is what has to be retired from the cache when
+ * it changes, and that list is what gets cached in the first place. Splitting
+ * them across files is how a new public route ends up cached and never
+ * invalidated.
+ *
+ * Deliberately **not** here: `/favorites`, `/following`, `/claims`,
+ * `/notifications`, `/preferences` and the rest of the per-customer writes.
+ * They are by far the most frequent writes in the system and none of them
+ * changes a byte of an anonymous response, so invalidating on them would keep
+ * the cache permanently cold for no benefit.
+ */
+const PUBLIC_CONTENT_WRITE_PREFIXES = [
+  '/offers',
+  '/services',
+  '/shops',
+  '/categories',
+  '/banners',
+  '/campaigns',
+  '/featured-campaigns',
+  '/visibility',
+  '/reviews',
+  '/onboarding',
+];
+
+/** Whether a write to this path can change a public discovery response. */
+const affectsPublicContent = (path) =>
+  PUBLIC_CONTENT_WRITE_PREFIXES.some(
+    (prefix) => path === prefix || path.startsWith(`${prefix}/`),
+  );
+
 const isPublicPath = (path) =>
   PUBLIC_PATTERNS.some((pattern) => pattern.test(path)) &&
   !PRIVATE_PATTERNS.some((pattern) => pattern.test(path));
@@ -91,3 +125,5 @@ function cachePolicy(req, res, next) {
 
 module.exports = cachePolicy;
 module.exports.isPublicPath = isPublicPath;
+module.exports.affectsPublicContent = affectsPublicContent;
+module.exports.PUBLIC_CONTENT_WRITE_PREFIXES = PUBLIC_CONTENT_WRITE_PREFIXES;

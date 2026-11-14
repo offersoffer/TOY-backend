@@ -220,12 +220,19 @@ Bounding growth is not the same as making the dashboards cheap. At 400 days
 `visibility_events` still settles at roughly 190 GB for the traffic modelled in
 §1.
 
-The real answer is already half-built and unused: `analytics_daily_snapshots`
-is written nightly by the `analytics-snapshots` job and **nothing in
-`src/modules/` reads it**. Every dashboard query goes to raw events. Point the
-long-horizon reads at that roll-up and `MAX_QUERY_DAYS` can drop to about 90,
-retention with it, and the storage question goes away rather than being
-bounded. That is a separate piece of work and the bigger win.
+The roll-up half of that is now done — see `docs/caching-and-rollups.md`. The
+KPI cards and the overview timeline read `analytics_daily_snapshots` for the
+whole days inside a window and raw events only for the partial days at each
+end, verified identical to the raw figures across 48 window/filter
+combinations.
+
+**It does not yet let retention drop.** Several readers still need the raw
+tables over a full window — `/analytics/locations`, `/analytics/categories`,
+`premium.locationInsights`, `radiusAnalysis`, `customerInsights`, `acquisition`
+and `offerPerformance` — and some ask what the snapshot cannot answer: city and
+category breakdowns, and distinct-customer counts, which cannot be summed
+across days. Until those are converted, `MAX_QUERY_DAYS` stays at 365 and
+retention at 400.
 
 Still outstanding from the same review, and none of it addressed here: the API
 runs as a single Node process with no clustering on a 2 GB t4g.small shared
