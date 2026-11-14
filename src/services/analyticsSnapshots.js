@@ -110,25 +110,42 @@ async function rebuildDay(date = defaultDay()) {
 async function backfill(days = 30) {
   const written = [];
   for (let offset = days; offset >= 1; offset -= 1) {
-    const date = new Date();
-    date.setDate(date.getDate() - offset);
-    written.push(await rebuildDay(date));
+    written.push(await rebuildDay(dayOffsetFromToday(-offset)));
   }
   return written;
 }
 
+/*
+ * ## Days are UTC days here, because that is what the queries above group by
+ *
+ * `db/pool.js` pins every connection's session time zone to `+00:00`, so the
+ * `DATE(v.created_at) = ?` filters in `rebuildDay` select a **UTC** day. The
+ * label written into `snapshot_date` therefore has to name that same UTC day.
+ *
+ * Deriving it from local date parts was wrong in a way that only showed up
+ * away from UTC. This job is scheduled at 00:20 local time; in Asia/Kolkata
+ * that is 18:50 UTC on the previous day, so "local yesterday" was a UTC day
+ * with five hours still to run. The job rolled up a partial day, labelled it
+ * final, and never came back to it - and a reader trusting that label would
+ * have served those five missing hours as a measured zero.
+ *
+ * `analyticsRollup.coverageDay` clamps the watermark as well, so neither side
+ * depends on the other getting this right.
+ */
+function dayOffsetFromToday(offset, now = new Date()) {
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + offset, 0, 0, 0, 0),
+  );
+}
+
+/** The last UTC day that is certainly over. */
 function defaultDay() {
-  const date = new Date();
-  date.setDate(date.getDate() - 1);
-  return date;
+  return dayOffsetFromToday(-1);
 }
 
 function toDateString(value) {
   if (typeof value === 'string') return value.slice(0, 10);
-  const date = new Date(value);
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${date.getFullYear()}-${month}-${day}`;
+  return new Date(value).toISOString().slice(0, 10);
 }
 
-module.exports = { rebuildDay, backfill, toDateString };
+module.exports = { rebuildDay, backfill, toDateString, dayOffsetFromToday };

@@ -3,6 +3,7 @@
 const { rawQuery } = require('../../db/pool');
 const geo = require('../../utils/geo');
 const { dayKeysBetween } = require('../../utils/dateRange');
+const analyticsRollup = require('../../services/analyticsRollup');
 
 /**
  * Premium analytics (V3 §8-§25).
@@ -145,29 +146,27 @@ function kpi(key, label, current, previous, options = {}) {
 // ---------------------------------------------------------------------------
 
 /** Engagement totals for one window, used for both the current and prior period. */
-async function totalsFor(context, from, to) {
+async function totalsFor(context, from, to, coveredDay) {
   const scope = offerScope(context);
   const window = [from, to];
 
-  const [events, saves, claims, customers, activeOffers] = await Promise.all([
-    rawQuery(
-      `SELECT v.event_type, COUNT(*) AS count, COUNT(DISTINCT v.user_id) AS people
-         FROM offer_views v JOIN offers o ON o.id = v.offer_id
-        WHERE v.created_at BETWEEN ? AND ?${scope.sql}
-        GROUP BY v.event_type`,
-      [...window, ...scope.params],
-    ),
-    rawQuery(
-      `SELECT COUNT(*) AS count FROM favorites f JOIN offers o ON o.id = f.offer_id
-        WHERE f.created_at BETWEEN ? AND ?${scope.sql}`,
-      [...window, ...scope.params],
-    ),
-    rawQuery(
-      `SELECT COUNT(*) AS claims, COALESCE(SUM(c.status = 'redeemed'), 0) AS redemptions
-         FROM offer_claims c JOIN offers o ON o.id = c.offer_id
-        WHERE c.claimed_at BETWEEN ? AND ?${scope.sql}`,
-      [...window, ...scope.params],
-    ),
+  /*
+   * The seven engagement counters come from `analyticsRollup`, which reads the
+   * nightly roll-up for the whole days inside the window and the raw events
+   * for the partial days at each end. Same numbers, a small indexed table
+   * instead of months of `offer_views`.
+   *
+   * `reach` and `newCustomers` stay on `shop_customers`: they are distinct
+   * *people*, and daily distinct counts cannot be added up - a customer who
+   * came back on Tuesday would be counted twice. `activeOffers` is current
+   * state rather than an event count, so it stays where it is too.
+   *
+   * `coveredDay` is threaded through so the overview's two calls - this period
+   * and the one before it - do not each ask the database where the roll-up has
+   * got to.
+   */
+  const [engagement, customers, activeOffers] = await Promise.all([
+    analyticsRollup.engagementTotals({ scope, from, to, coveredDay }),
     rawQuery(
       `SELECT COUNT(*) AS reach,
               COALESCE(SUM(sc.first_seen_at BETWEEN ? AND ?), 0) AS new_customers
@@ -183,22 +182,22 @@ async function totalsFor(context, from, to) {
     ),
   ]);
 
-  const byType = Object.fromEntries(events.map((row) => [row.event_type, num(row.count)]));
   const reach = num(customers[0].reach);
   const newCustomers = num(customers[0].new_customers);
 
   return {
-    impressions: byType.impression ?? 0,
-    views: byType.view ?? 0,
-    clicks: byType.click ?? 0,
-    shares: byType.share ?? 0,
-    saves: num(saves[0].count),
-    claims: num(claims[0].claims),
-    redemptions: num(claims[0].redemptions),
+    impressions: engagement.impressions,
+    views: engagement.views,
+    clicks: engagement.clicks,
+    shares: engagement.shares,
+    saves: engagement.saves,
+    claims: engagement.claims,
+    redemptions: engagement.redemptions,
     reach,
     newCustomers,
     returningCustomers: Math.max(reach - newCustomers, 0),
     activeOffers: num(activeOffers[0].count),
+    source: engagement.source,
   };
 }
 
@@ -206,10 +205,15 @@ async function totalsFor(context, from, to) {
 async function executiveOverview(context) {
   const { from, to, previousFrom, previousTo } = context.range;
 
+  // One watermark read for the whole response. Four callers would otherwise
+  // each ask the same MAX(snapshot_date), and could in principle disagree if
+  // the roll-up job finished a day mid-request.
+  const coveredDay = await analyticsRollup.coverageDay();
+
   const [current, previous, timeline, alerts] = await Promise.all([
-    totalsFor(context, from, to),
-    totalsFor(context, previousFrom, previousTo),
-    overviewTimeline(context),
+    totalsFor(context, from, to, coveredDay),
+    totalsFor(context, previousFrom, previousTo, coveredDay),
+    overviewTimeline(context, coveredDay),
     overviewAlerts(context),
   ]);
 
@@ -235,30 +239,15 @@ async function executiveOverview(context) {
 }
 
 /** Daily series behind the overview charts: views, claims, redemptions, growth. */
-async function overviewTimeline(context) {
+async function overviewTimeline(context, coveredDay) {
   const scope = offerScope(context);
   const { from, to } = context.range;
   const window = [from, to];
   const shopOnly = shopClause(context.shopIds, 'sc.shop_id');
 
-  const [views, claims, customers] = await Promise.all([
-    rawQuery(
-      `SELECT DATE(v.created_at) AS day,
-              SUM(v.event_type = 'view')       AS views,
-              SUM(v.event_type = 'impression') AS impressions
-         FROM offer_views v JOIN offers o ON o.id = v.offer_id
-        WHERE v.created_at BETWEEN ? AND ?${scope.sql}
-        GROUP BY day ORDER BY day`,
-      [...window, ...scope.params],
-    ),
-    rawQuery(
-      `SELECT DATE(c.claimed_at) AS day, COUNT(*) AS claims,
-              COALESCE(SUM(c.status = 'redeemed'), 0) AS redemptions
-         FROM offer_claims c JOIN offers o ON o.id = c.offer_id
-        WHERE c.claimed_at BETWEEN ? AND ?${scope.sql}
-        GROUP BY day ORDER BY day`,
-      [...window, ...scope.params],
-    ),
+  const [engagement, customers] = await Promise.all([
+    // Per-day engagement, roll-up where it can, raw for the partial ends.
+    analyticsRollup.engagementTimeline({ scope, from, to, coveredDay }),
     rawQuery(
       `SELECT DATE(sc.first_seen_at) AS day, COUNT(*) AS new_customers
          FROM shop_customers sc
@@ -283,15 +272,12 @@ async function overviewTimeline(context) {
   // for rather than showing them flat.
   for (const day of dayKeysBetween(from, to)) touch(day);
 
-  for (const row of views) {
-    const entry = touch(row.day);
-    entry.views = num(row.views);
-    entry.impressions = num(row.impressions);
-  }
-  for (const row of claims) {
-    const entry = touch(row.day);
-    entry.claims = num(row.claims);
-    entry.redemptions = num(row.redemptions);
+  for (const [day, totals] of engagement.byDay) {
+    const entry = touch(day);
+    entry.views = totals.views;
+    entry.impressions = totals.impressions;
+    entry.claims = totals.claims;
+    entry.redemptions = totals.redemptions;
   }
   for (const row of customers) {
     touch(row.day).newCustomers = num(row.new_customers);
