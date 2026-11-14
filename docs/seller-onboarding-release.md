@@ -21,36 +21,14 @@ Run the new migration from a developer checkout, over an SSH tunnel, before
 pushing:
 
 ```bash
-# 1. Borrow the API server's network position. RDS is VPC-private, so the
-#    connection arrives from 172.31.x and matches the grant.
-# Read the endpoint from the server and refuse to open a tunnel without it.
-# `grep | head | cut` takes its status from `cut`, which succeeds on empty
-# input - so a permission error on .env.production silently produced
-# `-L 13306::3306`, a tunnel that listens locally and forwards nowhere. The
-# emptiness check is what turns that into a visible failure.
-RDS=$(ssh -t offersoffer "sudo grep -m1 '^DB_HOST=' /srv/offersoffer/TOY-backend/.env.production" 2>/dev/null \
-      | cut -d= -f2 | tr -d '\r "')
-[ -n "$RDS" ] || { echo "could not read DB_HOST; nothing opened"; exit 1; }
-ssh -f -N -L "13306:$RDS:3306" offersoffer
-
-# Confirm it actually reaches MySQL before spending the migration on it.
-node -e "const s=require('net').createConnection({host:'127.0.0.1',port:13306});\
-s.setTimeout(6000);\
-s.on('data',d=>{console.log('MySQL '+d.subarray(5,d.indexOf(0,5)));s.destroy()});\
-s.on('timeout',()=>{console.log('no greeting - forward goes nowhere');s.destroy()});\
-s.on('error',e=>console.log(e.code))"
-
-# 2. Migrate from the checkout that HAS the new migration. Every DB_* value is
-#    explicit so nothing falls back to the developer's own .env.
-cd TOY-backend
-read -rsp "offers_migrate_prod password: " MIGPW && echo
-DB_HOST=127.0.0.1 DB_PORT=13306 DB_NAME=offers_production \
-DB_USER=offers_migrate_prod DB_PASSWORD="$MIGPW" node src/db/migrate.js
-unset MIGPW
-
-# 3. Close the tunnel, then push. The workflow deploys code only.
-pkill -f "13306:"
-git push
+# Borrows the API server's network position - RDS is VPC-private, so the
+# connection has to arrive from 172.31.x to match the grant.
+#
+# The script reads DB_HOST off the server, validates that what came back is
+# actually a hostname, and refuses to go on unless MySQL answers down the
+# forward. Its header records the three ways a hand-written one-liner produced
+# a tunnel that looked fine and went nowhere.
+scripts/prod-tunnel.sh
 ```
 
 `NODE_ENV` is deliberately left unset: it keeps `productionGuard` out of the

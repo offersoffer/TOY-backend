@@ -220,22 +220,11 @@ conversion is near-instant now and hours later.
 Same order as every other release here — migrate first, then push:
 
 ```bash
-# Read the endpoint from the server and refuse to open a tunnel without it.
-# `grep | head | cut` takes its status from `cut`, which succeeds on empty
-# input - so a permission error on .env.production silently produced
-# `-L 13306::3306`, a tunnel that listens locally and forwards nowhere. The
-# emptiness check is what turns that into a visible failure.
-RDS=$(ssh -t offersoffer "sudo grep -m1 '^DB_HOST=' /srv/offersoffer/TOY-backend/.env.production" 2>/dev/null \
-      | cut -d= -f2 | tr -d '\r "')
-[ -n "$RDS" ] || { echo "could not read DB_HOST; nothing opened"; exit 1; }
-ssh -f -N -L "13306:$RDS:3306" offersoffer
-
-# Confirm it actually reaches MySQL before spending the migration on it.
-node -e "const s=require('net').createConnection({host:'127.0.0.1',port:13306});\
-s.setTimeout(6000);\
-s.on('data',d=>{console.log('MySQL '+d.subarray(5,d.indexOf(0,5)));s.destroy()});\
-s.on('timeout',()=>{console.log('no greeting - forward goes nowhere');s.destroy()});\
-s.on('error',e=>console.log(e.code))"
+# Opens the tunnel, reads DB_HOST off the server, validates it is actually a
+# hostname, and refuses to proceed unless MySQL answers down the forward.
+# See the header of that script for the three ways a hand-written one-liner
+# produced a tunnel that looked fine and went nowhere.
+scripts/prod-tunnel.sh
 ```
 
 ```bash

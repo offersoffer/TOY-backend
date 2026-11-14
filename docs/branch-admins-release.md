@@ -35,24 +35,14 @@ deploy, so "migrate on the server, then push" cannot work. Run it from a
 developer checkout over an SSH tunnel first:
 
 ```bash
-# 1. Borrow the API server's network position. RDS is VPC-private, so the
-#    connection arrives from 172.31.x and matches the grant.
-# Read the endpoint from the server and refuse to open a tunnel without it.
-# `grep | head | cut` takes its status from `cut`, which succeeds on empty
-# input - so a permission error on .env.production silently produced
-# `-L 13306::3306`, a tunnel that listens locally and forwards nowhere. The
-# emptiness check is what turns that into a visible failure.
-RDS=$(ssh -t offersoffer "sudo grep -m1 '^DB_HOST=' /srv/offersoffer/TOY-backend/.env.production" 2>/dev/null \
-      | cut -d= -f2 | tr -d '\r "')
-[ -n "$RDS" ] || { echo "could not read DB_HOST; nothing opened"; exit 1; }
-ssh -f -N -L "13306:$RDS:3306" offersoffer
-
-# Confirm it actually reaches MySQL before spending the migration on it.
-node -e "const s=require('net').createConnection({host:'127.0.0.1',port:13306});\
-s.setTimeout(6000);\
-s.on('data',d=>{console.log('MySQL '+d.subarray(5,d.indexOf(0,5)));s.destroy()});\
-s.on('timeout',()=>{console.log('no greeting - forward goes nowhere');s.destroy()});\
-s.on('error',e=>console.log(e.code))"
+# Borrows the API server's network position - RDS is VPC-private, so the
+# connection has to arrive from 172.31.x to match the grant.
+#
+# The script reads DB_HOST off the server, validates that what came back is
+# actually a hostname, and refuses to go on unless MySQL answers down the
+# forward. Its header records the three ways a hand-written one-liner produced
+# a tunnel that looked fine and went nowhere.
+scripts/prod-tunnel.sh
 ```
 
 ```bash
@@ -76,7 +66,7 @@ export PATH="$HOME/.nvm/versions/node/v22.23.2/bin:$PATH"
 
 ```bash
 # 3. Close the tunnel.
-pkill -f "13306:"
+scripts/prod-tunnel.sh --close
 ```
 
 Expected output, and the only acceptable output:
