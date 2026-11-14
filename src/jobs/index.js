@@ -12,6 +12,7 @@ const subscriptionService = require('../modules/subscriptions/subscription.servi
 const featureOverrides = require('../modules/featureOverrides/featureOverride.service');
 const claimService = require('../modules/claims/claim.service');
 const failureLog = require('../services/failureLog');
+const analyticsRetention = require('../services/analyticsRetention');
 const featuredCampaigns = require('../services/visibility/campaign.service');
 const visibilitySignals = require('../services/visibility/signals.service');
 const visibilityAnalytics = require('../services/visibility/visibilityAnalytics.service');
@@ -224,6 +225,35 @@ const jobs = [
         failure_records_pruned: failures,
         idempotency_keys_pruned: keys,
         retention_days: env.logging.retentionDays,
+      };
+    },
+  },
+  {
+    name: 'analytics-retention',
+    /**
+     * 04:15 daily, deliberately on its own and deliberately not inside
+     * `prune`.
+     *
+     * Everything `prune` deletes is small and bounded. This deletes from the
+     * three largest tables in the database, in batches, under a row budget, and
+     * can take minutes rather than milliseconds. Running it alongside the light
+     * sweeps would hide its duration inside theirs and put three delete storms
+     * next to four small ones; a separate job gets its own timing, its own
+     * failure, and its own line in the log.
+     *
+     * 04:15 also keeps it clear of `analytics-snapshots` at 00:20, which reads
+     * yesterday's events to build the roll-ups. Rolling up first and deleting
+     * later is the only order in which both are correct.
+     */
+    schedule: '15 4 * * *',
+    run: async () => {
+      const result = await analyticsRetention.run(env.analytics.retentionDays);
+      return {
+        processed: result.deleted,
+        retention_days: result.retentionDays,
+        partitions_added: result.partitions.added,
+        partitions_dropped: result.partitions.dropped,
+        per_table: result.perTable,
       };
     },
   },

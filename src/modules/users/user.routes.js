@@ -14,6 +14,7 @@ const { limitOffset, paginationSchema } = require('../../utils/pagination');
 const { ok, created, noContent, paginated } = require('../../utils/respond');
 const accessControl = require('../../services/accessControl');
 const shopService = require('../shops/shop.service');
+const analyticsPartitions = require('../../services/analyticsPartitions');
 const passwordUtil = require('../../utils/password');
 const storage = require('../../services/storage');
 const logger = require('../../utils/logger');
@@ -240,12 +241,32 @@ router.delete(
       }
     }
 
-    // One statement; InnoDB applies every cascade atomically. Refresh tokens go
-    // with it, so every device is signed out as a side effect.
+    /*
+     * `visibility_events` is partitioned, and InnoDB will not keep a foreign
+     * key on a partitioned table (error 1506), so the `ON DELETE SET NULL`
+     * that used to anonymise this person's impression rows no longer exists.
+     * This is that, said out loud.
+     *
+     * Before the DELETE, because afterwards there is no id left to match on -
+     * the same reason the audit entry above is written first. Indexed by
+     * `idx_ve_user_listing`, so it finds the rows rather than scanning.
+     *
+     * Not best-effort. An account deletion that leaves the person's browsing
+     * attached to their id is a broken promise, not a tidy-up that failed, so a
+     * failure here fails the request and nothing is deleted.
+     */
+    const scrubbed = await analyticsPartitions.scrubUser(req.user.id);
+
+    // One statement; InnoDB applies every remaining cascade atomically. Refresh
+    // tokens go with it, so every device is signed out as a side effect.
     await execute('DELETE FROM users WHERE id = ?', [req.user.id]);
 
     logger.info(
-      { event: 'ACCOUNT_DELETED', user_id: Number(user.id) },
+      {
+        event: 'ACCOUNT_DELETED',
+        user_id: Number(user.id),
+        visibility_events_anonymised: scrubbed,
+      },
       'User deleted their own account',
     );
 

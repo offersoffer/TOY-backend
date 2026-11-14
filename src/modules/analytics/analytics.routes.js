@@ -11,11 +11,13 @@ const { requirePermission, requireGlobalPermission } = require('../../middleware
 const accessControl = require('../../services/accessControl');
 const { ok } = require('../../utils/respond');
 const { dayKeysBetween } = require('../../utils/dateRange');
+const retention = require('../../config/analyticsRetention');
+const env = require('../../config/env');
 
 const router = express.Router();
 
 const rangeQuery = z.object({
-  days: z.coerce.number().int().min(1).max(365).default(30),
+  days: z.coerce.number().int().min(1).max(retention.MAX_QUERY_DAYS).default(30),
   // Custom range (§22). When both are given they win over `days`.
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
@@ -29,6 +31,19 @@ const rangeQuery = z.object({
  */
 function resolveRange(query) {
   if (query.from && query.to) {
+    // Refusing beats answering with a confident zero. `days` is capped below
+    // any legal retention, so only an explicit range can reach past what is
+    // still stored, and a chart that is empty because rows were deleted looks
+    // exactly like a chart that is empty because nothing happened.
+    if (!retention.isWithinRetention(query.from, env.analytics.retentionDays)) {
+      throw ApiError.badRequest(
+        `Analytics are kept for ${env.analytics.retentionDays} days. ` +
+          `The earliest date available is ${retention
+            .earliestServable(env.analytics.retentionDays)
+            .toISOString()
+            .slice(0, 10)}.`,
+      );
+    }
     const to = new Date(query.to);
     // An inclusive "to" date should cover the whole day the user picked.
     if (to.getHours() === 0 && to.getMinutes() === 0) to.setHours(23, 59, 59, 999);
@@ -436,10 +451,22 @@ router.get(
                     AND (o.applicability_type = 'shop_wide'
                       OR EXISTS (SELECT 1 FROM offer_locations ol
                                   WHERE ol.offer_id = o.id AND ol.branch_id = b.id))) AS active_offers,
-                (SELECT COUNT(*) FROM offer_views v WHERE v.branch_id = b.id AND v.event_type = 'view') AS views
+                -- Bounded by retention rather than left open.
+                --
+                -- This was an all-time count, which was accurate only while
+                -- nothing deleted old views. Now that the analytics-retention job
+                -- does, an unbounded count would quietly turn into "views
+                -- since whenever the prune job last caught up" while still
+                -- presenting itself as a total. Stating the window keeps the
+                -- number equal to what the table can actually support, and it
+                -- is the same figure as before for any shop younger than the
+                -- retention horizon.
+                (SELECT COUNT(*) FROM offer_views v
+                  WHERE v.branch_id = b.id AND v.event_type = 'view'
+                    AND v.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)) AS views
            FROM shop_branches b WHERE b.shop_id = ?${branchRows.sql}
           ORDER BY b.is_primary DESC, b.branch_name`,
-        [shopId, ...branchRows.params],
+        [env.analytics.retentionDays, shopId, ...branchRows.params],
       ),
       rawQuery(
         `SELECT o.id, o.title, o.view_count, o.click_count, o.favorite_count, s.name AS shop_name

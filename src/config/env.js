@@ -115,6 +115,16 @@ const env = {
     retentionDays: int(process.env.LOG_RETENTION_DAYS, 90),
   },
 
+  analytics: {
+    /**
+     * How long raw analytics events are kept. Default 400 days: the dashboards
+     * serve windows up to a year, and `config/analyticsRetention.js` refuses to
+     * start on a value that cannot answer what the API accepts. See that file
+     * for why the two numbers are tied together.
+     */
+    retentionDays: int(process.env.ANALYTICS_RETENTION_DAYS, 400),
+  },
+
   db: {
     host: process.env.DB_HOST || '127.0.0.1',
     port: int(process.env.DB_PORT, 3306),
@@ -388,5 +398,14 @@ if (env.claims.qrSecret && env.claims.qrSecret.length < MIN_QR_SECRET_LENGTH) {
       'Generate one with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'base64url\'))"',
   );
 }
+
+/**
+ * Retention shorter than the longest window the dashboards serve would make a
+ * twelve-month chart silently zero for its earliest months - a deleted number
+ * presented as a measured one. Checked here so the mistake is a failed boot on
+ * the machine where it was made, rather than a wrong chart discovered by a
+ * merchant a year later.
+ */
+require('./analyticsRetention').assertWindowIsServable(env.analytics.retentionDays);
 
 module.exports = env;

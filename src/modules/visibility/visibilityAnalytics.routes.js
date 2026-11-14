@@ -14,6 +14,8 @@ const plans = require('../../config/plans');
 const { ok } = require('../../utils/respond');
 const vis = require('../../config/visibility');
 const analytics = require('../../services/visibility/visibilityAnalytics.service');
+const retention = require('../../config/analyticsRetention');
+const env = require('../../config/env');
 const merchantEntitlements = require('../../services/visibility/merchantEntitlement.service');
 const campaigns = require('../../services/visibility/campaign.service');
 const signals = require('../../services/visibility/signals.service');
@@ -39,7 +41,7 @@ router.use(authenticate);
 router.use(requirePermission('VIEW_VISIBILITY_ANALYTICS'));
 
 const rangeQuery = z.object({
-  days: z.coerce.number().int().min(1).max(365).default(30),
+  days: z.coerce.number().int().min(1).max(retention.MAX_QUERY_DAYS).default(30),
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
   shopId: z.coerce.number().int().positive().optional(),
@@ -49,6 +51,19 @@ const rangeQuery = z.object({
 /** One explicit window, so every query in a response covers the same period. */
 function resolveRange(params) {
   if (params.from && params.to) {
+    // Refusing beats answering with a confident zero. `days` is capped below
+    // any legal retention, so only an explicit range can reach past what is
+    // still stored, and a chart that is empty because rows were deleted looks
+    // exactly like a chart that is empty because nothing happened.
+    if (!retention.isWithinRetention(params.from, env.analytics.retentionDays)) {
+      throw ApiError.badRequest(
+        `Analytics are kept for ${env.analytics.retentionDays} days. ` +
+          `The earliest date available is ${retention
+            .earliestServable(env.analytics.retentionDays)
+            .toISOString()
+            .slice(0, 10)}.`,
+      );
+    }
     const to = new Date(params.to);
     if (to.getHours() === 0 && to.getMinutes() === 0) to.setHours(23, 59, 59, 999);
     return { from: new Date(params.from), to, label: 'custom' };

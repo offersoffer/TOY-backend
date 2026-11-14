@@ -2099,7 +2099,9 @@ CREATE TABLE IF NOT EXISTS visibility_events (
   term                 VARCHAR(160)            DEFAULT NULL,
   is_suspicious        TINYINT(1)      NOT NULL DEFAULT 0,
   created_at           DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (id),
+  -- `created_at` joins the primary key because the table is partitioned by it,
+  -- and MySQL requires every unique key to contain every partitioning column.
+  PRIMARY KEY (id, created_at),
   -- The merchant dashboard's read: one shop, one event type, a window.
   KEY idx_ve_shop_type_time (shop_id, event_type, created_at),
   -- The ranking rollup's read: one listing, a window.
@@ -2111,14 +2113,26 @@ CREATE TABLE IF NOT EXISTS visibility_events (
   KEY idx_ve_session_listing (session_id, listing_type, listing_id, created_at),
   -- Anti-manipulation (§25) sweeps one device's recent events.
   KEY idx_ve_device (device_hash, created_at),
-  KEY idx_ve_time (created_at),
-  CONSTRAINT fk_ve_shop     FOREIGN KEY (shop_id)              REFERENCES shops (id)              ON DELETE CASCADE,
-  CONSTRAINT fk_ve_branch   FOREIGN KEY (branch_id)            REFERENCES shop_branches (id)      ON DELETE SET NULL,
-  CONSTRAINT fk_ve_category FOREIGN KEY (category_id)          REFERENCES categories (id)         ON DELETE SET NULL,
-  CONSTRAINT fk_ve_user     FOREIGN KEY (user_id)              REFERENCES users (id)              ON DELETE SET NULL,
-  CONSTRAINT fk_ve_campaign FOREIGN KEY (featured_campaign_id) REFERENCES featured_campaigns (id) ON DELETE SET NULL,
-  CONSTRAINT fk_ve_slot     FOREIGN KEY (slot_id)              REFERENCES featured_slots (id)     ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  KEY idx_ve_time (created_at)
+  -- No foreign keys, and not by oversight: InnoDB refuses them outright on a
+  -- partitioned table - "Foreign keys are not yet supported in conjunction
+  -- with partitioning", error 1506. What the six of them were doing is now
+  -- done deliberately, and services/analyticsPartitions.js is where each one
+  -- is accounted for. The one that is a promise rather than housekeeping -
+  -- anonymising a deleted account - is an explicit UPDATE in the
+  -- account-deletion path, with a test that fails if it disappears.
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  -- Monthly range partitions, so retention is a DROP PARTITION rather than a
+  -- delete of millions of rows: measured at 0.11 s against ~2.3 s for the same
+  -- month, and the alternative gets worse as the table grows, not better.
+  --
+  -- Only the catch-all is declared here. The months themselves are created by
+  -- analyticsPartitions.ensureFuturePartitions, which the migration runs and
+  -- the nightly job keeps ahead - hardcoding a list of months in a schema file
+  -- would mean a fresh install in 2028 started with partitions from 2026.
+  PARTITION BY RANGE COLUMNS (created_at) (
+    PARTITION p_future VALUES LESS THAN (MAXVALUE)
+  );
 
 -- ---------------------------------------------------------------------
 -- Per-campaign daily counters (§17).
