@@ -425,15 +425,23 @@ const COLUMN_PATCHES = [
             AFTER branch_id`,
   },
 
+  // Two patches rather than one with an `after`: a follow-up only runs when the
+  // *main* column was missing, so pairing them would mean an upgrade
+  // interrupted between the two ALTERs could never add the second - the
+  // re-run would see `contact_person_name` and skip the whole patch, leaving
+  // `branchValues` writing a column that does not exist.
   {
     table: 'shop_branches',
     column: 'contact_person_name',
     sql: `ALTER TABLE shop_branches ADD COLUMN contact_person_name VARCHAR(160)
             DEFAULT NULL AFTER contact_number`,
-    after: [
-      `ALTER TABLE shop_branches ADD COLUMN contact_person_email VARCHAR(190)
-         DEFAULT NULL AFTER contact_person_name`,
-    ],
+  },
+
+  {
+    table: 'shop_branches',
+    column: 'contact_person_email',
+    sql: `ALTER TABLE shop_branches ADD COLUMN contact_person_email VARCHAR(190)
+            DEFAULT NULL AFTER contact_person_name`,
   },
 ];
 
