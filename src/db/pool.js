@@ -14,7 +14,9 @@ const pool = mysql.createPool({
   database: env.db.database,
   waitForConnections: true,
   connectionLimit: env.db.connectionLimit,
-  queueLimit: 0,
+  // Bounded on purpose; see config/env.js for why unlimited was the wrong
+  // failure mode.
+  queueLimit: env.db.queueLimit,
   charset: 'utf8mb4_unicode_ci',
   dateStrings: ['DATE'],
   timezone: 'Z',

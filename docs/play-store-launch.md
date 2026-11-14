@@ -12,13 +12,14 @@ A tickable copy of this lives at
 
 ## 0. Two decisions gate everything else
 
-**Register as an organization, not as a personal account.** A personal
-developer account created after 13 November 2023 must run a closed test with at
-least **12 testers opted in continuously for 14 days** before it may even
-*apply* for production access, and passing only makes it eligible — review
-follows. Organization accounts are exempt. That choice is made in the first
-five minutes of signup and can cost two to three weeks. An organization needs a
-D-U-N-S number; obtaining one is usually still faster than the testing clock.
+**Registered as an organization — settled, and it removes the longest gate.**
+A personal developer account created after 13 November 2023 must run a closed
+test with at least **12 testers opted in continuously for 14 days** before it
+may even *apply* for production access, and passing only makes it eligible.
+Organization accounts are exempt, so step 19 below does not apply and nothing
+here waits on a two-week tester clock. Internal testing is still worth using
+first, for the reasons in §6 — it is the only way to prove the three paths
+nobody has run on hardware.
 
 **The in-app Razorpay checkout was a policy problem. It has been removed.**
 Google's Payments policy has **no exemption for B2B or SaaS**: it names "cloud
@@ -88,11 +89,11 @@ Verified, so do not redo:
 
 ## 3. Create the app and wire up credentials
 
-4. Create the app in the Console. The package is fixed by the build:
-   `com.toy.offersapp`.
-5. Accept Play App Signing (the default). Google holds the app signing key and
-   the EAS keystore becomes the upload key, which is what makes a lost upload
-   key recoverable.
+4. ~~Create the app in the Console.~~ **Done.** The package is fixed by the
+   build: `com.toy.offersapp`.
+5. ~~Accept Play App Signing.~~ **Done.** Google holds the app signing key and
+   the EAS keystore is the upload key, which is what makes a lost upload key
+   recoverable.
 6. Create the submission service account: Console → Setup → API access → link a
    Google Cloud project → create a service account → grant it **Release
    manager** → download the JSON key → attach it with `eas credentials -p
@@ -150,9 +151,9 @@ Internal testing has no tester minimum and no waiting period. Use it first.
     at a counter, confirm a push notification arrives, and — signed in — open
     home, Near Me, search, a category and ending soon. That last path has never
     been exercised signed-in against production.
-19. Closed testing, personal accounts only: 12 testers opted in **continuously**
-    for the 14 days preceding the application. A tester who opts out and back in
-    restarts their clock.
+19. ~~Closed testing with 12 testers for 14 days.~~ **Does not apply** — the
+    account is an organization, which is exempt. This was the longest item on
+    the critical path and it is gone.
 
 ---
 

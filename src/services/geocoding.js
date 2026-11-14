@@ -1,6 +1,7 @@
 'use strict';
 
 const env = require('../config/env');
+const sharedCache = require('./cache');
 
 /**
  * Address -> coordinates (§17).
@@ -246,18 +247,47 @@ async function searchAddresses(queryText, { limit = 5 } = {}) {
   const text = clean(queryText);
   if (text.length < 3) return [];
 
-  const deadline = Date.now() + env.geocoding.requestTimeoutMs + env.geocoding.minIntervalMs;
-  try {
-    const results = await schedule(
-      () => request('/search', { q: text, format: 'jsonv2', addressdetails: 1, limit }),
-      deadline,
-    );
-    if (results === SKIPPED || !Array.isArray(results)) return [];
-    return results.map(toPlace).filter(Boolean);
-  } catch {
-    // The picker still works without search: the merchant can drag the pin.
-    return [];
-  }
+  /*
+   * Cached, because this is the hottest path into a provider that allows about
+   * one request a second.
+   *
+   * `/geo/search` is public and the mobile location picker calls it as the
+   * customer types, so "Coimbatore" is looked up by every new user in the
+   * city. The `lookup` cascade above has had an in-process Map since it was
+   * written; this and `reverse` had nothing, which left the one-per-second
+   * budget being spent on the same few hundred place names for ever.
+   *
+   * Keyed on the lower-cased text so capitalisation does not split the key.
+   * Returning `undefined` from the loader is how the cache facade is told not
+   * to store an answer - see the failure branches below.
+   */
+  const cached = await sharedCache.wrap(
+    'geocode',
+    { op: 'search', q: text.toLowerCase(), limit },
+    env.geocoding.resultTtlSeconds,
+    async () => {
+      const deadline = Date.now() + env.geocoding.requestTimeoutMs + env.geocoding.minIntervalMs;
+      try {
+        const results = await schedule(
+          () => request('/search', { q: text, format: 'jsonv2', addressdetails: 1, limit }),
+          deadline,
+        );
+        // A skipped request means the queue was too deep, not that the place
+        // does not exist. Not an answer, so not cached.
+        if (results === SKIPPED) return undefined;
+        if (!Array.isArray(results)) return undefined;
+        return results.map(toPlace).filter(Boolean);
+      } catch {
+        // The picker still works without search: the merchant can drag the
+        // pin. A provider failure is emphatically not a cacheable "no match" -
+        // storing it would turn a minute of trouble into a day of a city not
+        // existing.
+        return undefined;
+      }
+    },
+  );
+
+  return cached ?? [];
 }
 
 /**
@@ -271,17 +301,36 @@ async function searchAddresses(queryText, { limit = 5 } = {}) {
 async function reverse(latitude, longitude) {
   if (!isConfigured()) return null;
 
-  const deadline = Date.now() + env.geocoding.requestTimeoutMs + env.geocoding.minIntervalMs;
-  try {
-    const hit = await schedule(
-      () => request('/reverse', { lat: latitude, lon: longitude, format: 'jsonv2', addressdetails: 1 }),
-      deadline,
-    );
-    if (hit === SKIPPED || !hit || hit.error) return null;
-    return toPlace(hit);
-  } catch {
-    return null;
-  }
+  // Rounded before it becomes a key: a pin drag produces a new coordinate
+  // every few pixels, so the raw value would never be asked for twice.
+  const places = env.geocoding.reversePrecision;
+  const key = {
+    op: 'reverse',
+    lat: Number(latitude).toFixed(places),
+    lon: Number(longitude).toFixed(places),
+  };
+
+  const cached = await sharedCache.wrap(
+    'geocode',
+    key,
+    env.geocoding.resultTtlSeconds,
+    async () => {
+      const deadline = Date.now() + env.geocoding.requestTimeoutMs + env.geocoding.minIntervalMs;
+      try {
+        const hit = await schedule(
+          () => request('/reverse', { lat: latitude, lon: longitude, format: 'jsonv2', addressdetails: 1 }),
+          deadline,
+        );
+        // Skipped or errored is not an answer about this coordinate.
+        if (hit === SKIPPED || !hit || hit.error) return undefined;
+        return toPlace(hit);
+      } catch {
+        return undefined;
+      }
+    },
+  );
+
+  return cached ?? null;
 }
 
 module.exports = { isConfigured, lookup, searchAddresses, reverse };

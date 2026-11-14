@@ -122,7 +122,27 @@ const env = {
     user: process.env.DB_USER || 'root',
     password: process.env.DB_PASSWORD || '',
     database: process.env.DB_NAME || 'offers_app',
-    connectionLimit: int(process.env.DB_CONNECTION_LIMIT, 10),
+    /**
+     * Raised from 10 because the documentation already said to: "Raise for
+     * production traffic; 20 is a reasonable start." The default was the one
+     * being used.
+     */
+    connectionLimit: int(process.env.DB_CONNECTION_LIMIT, 20),
+    /**
+     * How many callers may wait for a connection before new ones are refused.
+     *
+     * It was `0`, which mysql2 reads as unlimited. That is the wrong failure
+     * mode: a burst past the pool size does not fail, it queues, and the
+     * queue has no end - so latency climbs on every endpoint at once, health
+     * checks included, until things time out everywhere rather than in the
+     * one place that is actually overloaded.
+     *
+     * A bound sheds the excess and keeps the rest answering. Ten times the
+     * pool is deep enough to absorb an ordinary spike and shallow enough that
+     * a real overload is reported as errors - which are visible - instead of
+     * as universal slowness, which is not.
+     */
+    queueLimit: int(process.env.DB_QUEUE_LIMIT, int(process.env.DB_CONNECTION_LIMIT, 20) * 10),
   },
 
   jwt: {
@@ -356,6 +376,27 @@ const env = {
     /** Pending lookups after which new ones are skipped rather than queued. */
     maxQueueDepth: int(process.env.GEOCODING_MAX_QUEUE_DEPTH, 8),
     cacheSize: int(process.env.GEOCODING_CACHE_SIZE, 500),
+    /**
+     * How long a place lookup is reused, in seconds.
+     *
+     * A day, because places do not move and the provider's budget is the
+     * scarce thing here: the public Nominatim instance allows roughly one
+     * request a second and may block heavy use, which makes every avoided
+     * call worth more than every fresh one.
+     *
+     * Only *successful* answers are stored. A timeout, a skipped request or a
+     * provider error returns the same empty result as "no such place", and
+     * caching those would turn a minute of provider trouble into a day of a
+     * city not existing.
+     */
+    resultTtlSeconds: int(process.env.GEOCODING_RESULT_TTL, 86400),
+    /**
+     * Decimal places coordinates are rounded to before they become a cache
+     * key. Four is about 11 metres - close enough that two drags of the same
+     * pin share an answer, coarse enough that they actually collide. Raw
+     * coordinates are unique per drag and would never hit.
+     */
+    reversePrecision: int(process.env.GEOCODING_REVERSE_PRECISION, 4),
   },
 
   billing: {

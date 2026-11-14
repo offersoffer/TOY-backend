@@ -2,7 +2,7 @@
 
 Every variable the backend reads, what it does in production, and whether you
 have to set it. Derived from the code (`grep process.env` across `src/` and
-`scripts/`), not from memory — 90 variables, all listed.
+`scripts/`), not from memory — 93 variables, all listed.
 
 **This file contains no real values and must never contain any.** Placeholders
 are written `<...>`. Real production credentials belong in `.env.production` on
@@ -59,7 +59,8 @@ staging.
 | `PRODUCTION_DB_HOSTS` | Optional | — | Comma-separated allow-list of permitted hosts. Leave blank if the host is not predictable (service DNS, socket). |
 | `DB_USER` | **Required** | `root` | A dedicated least-privilege user. `root` and `admin` are rejected at startup. |
 | `DB_PASSWORD` | **Required** | empty | Rejected if empty. Must differ from dev and staging. |
-| `DB_CONNECTION_LIMIT` | Recommended | `10` | Raise for production traffic; 20 is a reasonable start. |
+| `DB_CONNECTION_LIMIT` | Recommended | `20` | Was 10, which was also what production used. Raise further if the pool is the bottleneck. |
+| `DB_QUEUE_LIMIT` | Optional | `connection limit x 10` | Callers that may wait for a connection before new ones are refused. Was unlimited, which turned a burst into site-wide latency instead of shed load. |
 
 The startup guard also rejects a `DB_NAME` containing `dev`, `staging`, `test`,
 `qa`, `sandbox`, `demo`, `local` or `scratch`.
@@ -208,6 +209,8 @@ to clean up an image whose thumbnail failed to upload.
 | `GEOCODING_API_BASE` | Recommended | `https://nominatim.openstreetmap.org` | The public instance allows ~1 request/second and may block heavy use. Self-host or use a commercial endpoint for production volume. |
 | `GEOCODING_USER_AGENT` | Recommended | `OffersOffer/1.0 (<APP_URL>)` | Nominatim's usage policy requires an identifying agent. The default embeds `APP_URL`, so leaving `APP_URL` unset advertises localhost. |
 | `GEOCODING_MIN_INTERVAL_MS` | Optional | `1100` | Do not lower against the public instance. |
+| `GEOCODING_RESULT_TTL` | Optional | `86400` | Seconds a place lookup is reused. Places do not move; the provider's budget is the scarce thing. Only successful answers are stored - a timeout is never cached as "no such place". |
+| `GEOCODING_REVERSE_PRECISION` | Optional | `4` | Decimal places coordinates are rounded to before becoming a cache key. Four is about 11 m; raw coordinates are unique per pin drag and would never hit. |
 | `GEOCODING_TIMEOUT_MS` | Optional | `5000` | |
 | `GEOCODING_BUDGET_MS` | Optional | `12000` | |
 | `GEOCODING_MAX_QUERIES` | Optional | `4` | |
