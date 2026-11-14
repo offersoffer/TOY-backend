@@ -12,6 +12,17 @@ a ticket, or a chat message.
 Production reads `.env.production` and never the generic `.env`. A production
 process cannot inherit a developer's database or their test payment keys.
 
+On the server it is at **`/srv/offersoffer/TOY-backend/.env.production`** -
+inside the checkout, not beside it. `/srv/offersoffer` itself is `drwxr-x---`
+and owned by `offers`, so reading it as any other login needs `sudo`. Recorded
+because guessing the path cost two failed attempts at opening a migration
+tunnel; the file's *contents* still belong nowhere but that host.
+
+Note also that the box hosts a second, unrelated application
+(`/srv/billing/backend`, `fmpb-billing.service`). It shares the 2 GB instance
+with this API, the AI service and nginx, which is worth remembering before
+sizing anything.
+
 ## Deployment shape
 
 One origin, `https://offersoffer.in`. Nginx serves the Angular build and

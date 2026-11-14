@@ -42,7 +42,7 @@ developer checkout over an SSH tunnel first:
 # input - so a permission error on .env.production silently produced
 # `-L 13306::3306`, a tunnel that listens locally and forwards nowhere. The
 # emptiness check is what turns that into a visible failure.
-RDS=$(ssh -t offersoffer "sudo grep -m1 '^DB_HOST=' /srv/offersoffer/.env.production" 2>/dev/null \
+RDS=$(ssh -t offersoffer "sudo grep -m1 '^DB_HOST=' /srv/offersoffer/TOY-backend/.env.production" 2>/dev/null \
       | cut -d= -f2 | tr -d '\r "')
 [ -n "$RDS" ] || { echo "could not read DB_HOST; nothing opened"; exit 1; }
 ssh -f -N -L "13306:$RDS:3306" offersoffer
