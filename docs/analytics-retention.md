@@ -220,7 +220,22 @@ conversion is near-instant now and hours later.
 Same order as every other release here — migrate first, then push:
 
 ```bash
-ssh -f -N -L 13306:<rds-endpoint>:3306 offersoffer
+# Read the endpoint from the server and refuse to open a tunnel without it.
+# `grep | head | cut` takes its status from `cut`, which succeeds on empty
+# input - so a permission error on .env.production silently produced
+# `-L 13306::3306`, a tunnel that listens locally and forwards nowhere. The
+# emptiness check is what turns that into a visible failure.
+RDS=$(ssh -t offersoffer "sudo grep -m1 '^DB_HOST=' /srv/offersoffer/.env.production" 2>/dev/null \
+      | cut -d= -f2 | tr -d '\r "')
+[ -n "$RDS" ] || { echo "could not read DB_HOST; nothing opened"; exit 1; }
+ssh -f -N -L "13306:$RDS:3306" offersoffer
+
+# Confirm it actually reaches MySQL before spending the migration on it.
+node -e "const s=require('net').createConnection({host:'127.0.0.1',port:13306});\
+s.setTimeout(6000);\
+s.on('data',d=>{console.log('MySQL '+d.subarray(5,d.indexOf(0,5)));s.destroy()});\
+s.on('timeout',()=>{console.log('no greeting - forward goes nowhere');s.destroy()});\
+s.on('error',e=>console.log(e.code))"
 ```
 
 ```bash
@@ -229,6 +244,15 @@ read -rsp "offers_migrate_prod password: " MIGPW && echo
 DB_HOST=127.0.0.1 DB_PORT=13306 DB_NAME=offers_production \
 DB_USER=offers_migrate_prod DB_PASSWORD="$MIGPW" node src/db/migrate.js
 unset MIGPW
+```
+
+**`node` must be 22.** A plain login shell on the developer machine resolves
+`node` to whatever nvm's default is - v18.12.1 at the time of writing - and the
+migration will fail on syntax before it reaches the database. Prefix the command
+above, or run `nvm use 22` first:
+
+```bash
+export PATH="$HOME/.nvm/versions/node/v22.23.2/bin:$PATH"
 ```
 
 Expect two new patches to report:
