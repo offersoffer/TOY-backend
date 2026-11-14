@@ -229,7 +229,7 @@ scripts/prod-tunnel.sh
 
 ```bash
 cd TOY-backend
-read -rsp "offers_migrate_prod password: " MIGPW && echo
+printf 'offers_migrate_prod password: ' && read -rs MIGPW && echo
 DB_HOST=127.0.0.1 DB_PORT=13306 DB_NAME=offers_production \
 DB_USER=offers_migrate_prod DB_PASSWORD="$MIGPW" node src/db/migrate.js
 unset MIGPW

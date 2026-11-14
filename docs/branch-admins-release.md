@@ -49,7 +49,7 @@ scripts/prod-tunnel.sh
 # 2. Migrate from the checkout that HAS the new migration. Every DB_* value is
 #    explicit so nothing falls back to the developer's own .env.
 cd TOY-backend
-read -rsp "offers_migrate_prod password: " MIGPW && echo
+printf 'offers_migrate_prod password: ' && read -rs MIGPW && echo
 DB_HOST=127.0.0.1 DB_PORT=13306 DB_NAME=offers_production \
 DB_USER=offers_migrate_prod DB_PASSWORD="$MIGPW" node src/db/migrate.js
 unset MIGPW

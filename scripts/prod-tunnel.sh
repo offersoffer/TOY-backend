@@ -112,12 +112,21 @@ socket.on("error", (error) => {
 ' "$LOCAL_PORT" || die "the tunnel is open but does not reach MySQL. Run --close and check DB_HOST."
 
 echo
-echo "Ready. Run the migration with:"
-echo
-echo '  cd '"$(pwd)"' \'
-echo '    && export PATH="$HOME/.nvm/versions/node/v22.23.2/bin:$PATH" \'
-echo '    && read -rsp "offers_migrate_prod password: " MIGPW && echo \'
-echo '    && DB_HOST=127.0.0.1 DB_PORT='"${LOCAL_PORT}"' DB_NAME=offers_production \'
-echo '       DB_USER=offers_migrate_prod DB_PASSWORD="$MIGPW" node src/db/migrate.js; unset MIGPW'
-echo
-echo "Then close it with: scripts/prod-tunnel.sh --close"
+# Printed rather than run: the password is the operator's to type, and this
+# script has no business holding it.
+#
+# `printf` plus `read -rs` rather than bash's `read -p`. The login shell here
+# is zsh, where `-p` means "read from the coprocess" and the command dies with
+# "read: -p: no coprocess" - after the tunnel is already open, so it reads as
+# the tunnel having failed.
+cat <<EOF
+Ready. Run the migration with:
+
+  cd $(pwd) \\
+    && export PATH="\$HOME/.nvm/versions/node/v22.23.2/bin:\$PATH" \\
+    && printf 'offers_migrate_prod password: ' && read -rs MIGPW && echo \\
+    && DB_HOST=127.0.0.1 DB_PORT=${LOCAL_PORT} DB_NAME=offers_production \\
+       DB_USER=offers_migrate_prod DB_PASSWORD="\$MIGPW" node src/db/migrate.js; unset MIGPW
+
+Then close it with: scripts/prod-tunnel.sh --close
+EOF
