@@ -41,7 +41,19 @@ router.use(authenticate);
 router.use(requirePermission('VIEW_VISIBILITY_ANALYTICS'));
 
 const rangeQuery = z.object({
-  days: z.coerce.number().int().min(1).max(retention.MAX_QUERY_DAYS).default(30),
+  /*
+   * Lower than the offer dashboards' 365 on purpose.
+   *
+   * These charts read `visibility_events`, the impression firehose - measured
+   * at 1,094 bytes a row against 314 for `offer_views`, with one to two orders
+   * of magnitude more rows because every feed render writes about twenty.
+   * Keeping 400 days of it to serve one dashboard was most of the storage
+   * problem, so the table keeps 90 days and this asks for at most 60.
+   *
+   * The headline KPIs and trends are unaffected: they come from the daily
+   * roll-up and still reach back a year.
+   */
+  days: z.coerce.number().int().min(1).max(retention.MAX_VISIBILITY_QUERY_DAYS).default(30),
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
   shopId: z.coerce.number().int().positive().optional(),
@@ -55,11 +67,12 @@ function resolveRange(params) {
     // any legal retention, so only an explicit range can reach past what is
     // still stored, and a chart that is empty because rows were deleted looks
     // exactly like a chart that is empty because nothing happened.
-    if (!retention.isWithinRetention(params.from, env.analytics.retentionDays)) {
+    const horizon = retention.retentionFor('visibility_events');
+    if (!retention.isWithinRetention(params.from, horizon)) {
       throw ApiError.badRequest(
-        `Analytics are kept for ${env.analytics.retentionDays} days. ` +
+        `Visibility analytics are kept for ${horizon} days. ` +
           `The earliest date available is ${retention
-            .earliestServable(env.analytics.retentionDays)
+            .earliestServable(horizon)
             .toISOString()
             .slice(0, 10)}.`,
       );

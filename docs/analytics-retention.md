@@ -42,6 +42,55 @@ It is deliberately out of scope.
 
 ---
 
+## 1a. Retention is per table, because the tables are not alike
+
+One number for all three was forcing the worst case onto the cheapest tables.
+Measured on disk, 200,000 rows loaded into each:
+
+| table | bytes/row | secondary indexes | gets a row when |
+|---|---|---|---|
+| `visibility_events` | **1,094** | 8 | every impression — about 20 per feed render |
+| `analytics_events` | 503 | 8 | a tracked action happens |
+| `offer_views` | 314 | 5 | somebody opens an offer |
+
+`visibility_events` is the storage problem almost on its own: three and a half
+times the row cost *and* one to two orders of magnitude more rows. Its only
+long-window reader was the merchant visibility dashboard — everything else that
+touches it (ranking, fairness, frequency caps, anti-manipulation) works in
+hours.
+
+So the horizons are now set per table, each against the window its own readers
+accept:
+
+| table | retention | max query window | pruned by |
+|---|---|---|---|
+| `visibility_events` | **90 days** | 60 days | DROP PARTITION |
+| `analytics_events` | 400 days | 365 days | batched DELETE |
+| `offer_views` | 400 days | 365 days | batched DELETE |
+
+`assertHorizonsAreServable` refuses to boot if any table's retention cannot
+answer its own routes, so neither number can move without the other noticing.
+
+**Projected effect**, from the measured bytes/row against the traffic model in
+§1 (600,000 impressions, 60,000 actions and 30,000 offer opens a day):
+
+| | 400 days everywhere | per-table |
+|---|---|---|
+| `visibility_events` | 245 GB | **55 GB** |
+| `analytics_events` | 11 GB | 11 GB |
+| `offer_views` | 4 GB | 4 GB |
+| total | 259 GB | **70 GB** (73% less) |
+
+A projection, not a measurement: the bytes/row are measured, the row counts are
+the model.
+
+The cost is that the visibility dashboards — impressions by surface, average
+position, featured versus organic — now reach back 60 days instead of 365.
+Headline KPIs and trends are unaffected; they come from the daily roll-up and
+still cover a year.
+
+---
+
 ## 2. The rule that keeps retention honest
 
 Retention must be **longer than the longest window the API will serve**, or a

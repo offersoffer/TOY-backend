@@ -35,11 +35,15 @@ function resolveRange(query) {
     // any legal retention, so only an explicit range can reach past what is
     // still stored, and a chart that is empty because rows were deleted looks
     // exactly like a chart that is empty because nothing happened.
-    if (!retention.isWithinRetention(query.from, env.analytics.retentionDays)) {
+    // `offer_views` is the table behind these endpoints, and it keeps its rows
+    // longer than `visibility_events` does - see config/analyticsRetention.js
+    // for why the two numbers are different.
+    const horizon = retention.retentionFor('offer_views');
+    if (!retention.isWithinRetention(query.from, horizon)) {
       throw ApiError.badRequest(
-        `Analytics are kept for ${env.analytics.retentionDays} days. ` +
+        `Analytics are kept for ${horizon} days. ` +
           `The earliest date available is ${retention
-            .earliestServable(env.analytics.retentionDays)
+            .earliestServable(horizon)
             .toISOString()
             .slice(0, 10)}.`,
       );
@@ -466,7 +470,7 @@ router.get(
                     AND v.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)) AS views
            FROM shop_branches b WHERE b.shop_id = ?${branchRows.sql}
           ORDER BY b.is_primary DESC, b.branch_name`,
-        [env.analytics.retentionDays, shopId, ...branchRows.params],
+        [retention.retentionFor('offer_views'), shopId, ...branchRows.params],
       ),
       rawQuery(
         `SELECT o.id, o.title, o.view_count, o.click_count, o.favorite_count, s.name AS shop_name

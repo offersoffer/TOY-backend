@@ -115,15 +115,6 @@ const env = {
     retentionDays: int(process.env.LOG_RETENTION_DAYS, 90),
   },
 
-  analytics: {
-    /**
-     * How long raw analytics events are kept. Default 400 days: the dashboards
-     * serve windows up to a year, and `config/analyticsRetention.js` refuses to
-     * start on a value that cannot answer what the API accepts. See that file
-     * for why the two numbers are tied together.
-     */
-    retentionDays: int(process.env.ANALYTICS_RETENTION_DAYS, 400),
-  },
 
   db: {
     host: process.env.DB_HOST || '127.0.0.1',
@@ -433,6 +424,6 @@ if (env.claims.qrSecret && env.claims.qrSecret.length < MIN_QR_SECRET_LENGTH) {
  * the machine where it was made, rather than a wrong chart discovered by a
  * merchant a year later.
  */
-require('./analyticsRetention').assertWindowIsServable(env.analytics.retentionDays);
+require('./analyticsRetention').assertHorizonsAreServable();
 
 module.exports = env;

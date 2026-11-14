@@ -86,13 +86,33 @@ test('retention below the margin is refused, and the error says what to set', ()
     () => config.assertWindowIsServable(90),
     (error) =>
       error.message.includes(String(config.MAX_QUERY_DAYS + config.MIN_MARGIN_DAYS)) &&
-      error.message.includes('ANALYTICS_RETENTION_DAYS'),
+      error.message.includes('maxQueryDays'),
   );
 });
 
 test('a non-numeric retention is refused rather than coerced', () => {
-  assert.throws(() => config.assertWindowIsServable(Number.NaN), /ANALYTICS_RETENTION_DAYS/);
-  assert.throws(() => config.assertWindowIsServable(undefined), /ANALYTICS_RETENTION_DAYS/);
+  assert.throws(() => config.assertWindowIsServable(Number.NaN), /Retention is/);
+  assert.throws(() => config.assertWindowIsServable(undefined), /Retention is/);
+});
+
+test('each table is checked against its own window, not one shared number', () => {
+  // The whole point of the split: visibility_events keeps 90 days because its
+  // dashboards ask for at most 60, while offer_views keeps 400 because seven
+  // premium dashboards still ask it for a year.
+  config.assertHorizonsAreServable();
+  assert.equal(config.retentionFor('visibility_events'), 90);
+  assert.equal(config.retentionFor('offer_views'), 400);
+  assert.ok(config.MAX_VISIBILITY_QUERY_DAYS < config.MAX_QUERY_DAYS);
+  for (const [table, spec] of Object.entries(config.TABLES)) {
+    assert.ok(
+      spec.retentionDays >= spec.maxQueryDays + config.MIN_MARGIN_DAYS,
+      `${table} cannot answer its own window`,
+    );
+  }
+});
+
+test('a table with no retention configured is refused rather than defaulted', () => {
+  assert.throws(() => config.retentionFor('users'), /No retention configured/);
 });
 
 // ---------------------------------------------------------------------------
@@ -216,16 +236,9 @@ test('the delete list and the partition list are disjoint and complete', () => {
   assert.ok(all.every((t) => t.column === 'created_at'));
 });
 
-test('pruneAll re-checks the window, so a bad config cannot reach the database', async () => {
-  reset(1000);
-  await assert.rejects(() => retention.pruneAll(30), /ANALYTICS_RETENTION_DAYS/);
-  assert.equal(calls.length, 0);
-});
-
-test('pruneAll covers every configured table and totals what it removed', async () => {
+test('pruneAll covers every delete-managed table and totals what it removed', async () => {
   reset(300);
-  const result = await retention.pruneAll(400);
-  assert.equal(result.retentionDays, 400);
+  const result = await retention.pruneAll();
   assert.equal(result.perTable.length, config.EVENT_TABLES.length);
   assert.equal(
     result.deleted,
@@ -234,4 +247,16 @@ test('pruneAll covers every configured table and totals what it removed', async 
   // 300 rows shared across the fake table: the first clears them, the rest
   // find nothing, which is what a caught-up run looks like.
   assert.equal(result.deleted, 300);
+});
+
+test('pruneAll asks each table for its own retention', async () => {
+  reset(10);
+  await retention.pruneAll();
+  // The DELETEs bind `days`; every one should be that table's own number.
+  const deletes = calls.filter((c) => c.sql.includes('DELETE FROM'));
+  assert.ok(deletes.length > 0);
+  for (const call of deletes) {
+    const table = /DELETE FROM `([a-z_]+)`/.exec(call.sql)[1];
+    assert.equal(call.params[0], config.retentionFor(table), `${table} got the wrong horizon`);
+  }
 });

@@ -335,8 +335,103 @@ async function rawTimeline(scope, from, to) {
   return [...views, ...saves, ...claims].map((row) => ({ ...row, day: row.day }));
 }
 
+/**
+ * The same seven counters, broken down per offer.
+ *
+ * `offerPerformance` asked for these as **seven correlated scalar subqueries
+ * per offer**, each one scanning `offer_views`, `favorites` or `offer_claims`
+ * for that offer's window. The snapshot keeps per-offer rows, so the whole set
+ * is one grouped read of a small table, plus the partial days at the window's
+ * ends.
+ *
+ * Returns a Map keyed by offer id. An offer with no activity is simply absent -
+ * callers that must list it anyway (every offer in scope, zeros included) start
+ * from `offers` and default a miss to zero, which is what the original SQL did
+ * by starting its FROM clause there.
+ *
+ * @returns {Promise<{byOffer: Map<number, object>, source: string}>}
+ */
+async function engagementByOffer({ scope, from, to, coveredDay }) {
+  const covered = coveredDay === undefined ? await coverageDay() : coveredDay;
+  const plan = planWindow(from, to, covered);
+  const byOffer = new Map();
+
+  const put = (offerId, row) => {
+    const id = Number(offerId);
+    if (!byOffer.has(id)) byOffer.set(id, zeroTotals());
+    addTotals(byOffer.get(id), row);
+  };
+
+  if (plan.snapshot) {
+    const rows = await rawQuery(
+      `SELECT s.offer_id,
+              COALESCE(SUM(s.impressions), 0) AS impressions,
+              COALESCE(SUM(s.views), 0)       AS views,
+              COALESCE(SUM(s.clicks), 0)      AS clicks,
+              COALESCE(SUM(s.shares), 0)      AS shares,
+              COALESCE(SUM(s.saves), 0)       AS saves,
+              COALESCE(SUM(s.claims), 0)      AS claims,
+              COALESCE(SUM(s.redemptions), 0) AS redemptions
+         FROM analytics_daily_snapshots s
+         JOIN offers o ON o.id = s.offer_id
+        WHERE s.offer_id <> 0 AND s.branch_id = 0
+          AND s.snapshot_date BETWEEN ? AND ?${scope.sql}
+        GROUP BY s.offer_id`,
+      [plan.snapshot.fromDay, plan.snapshot.toDay, ...scope.params],
+    );
+    for (const row of rows) put(row.offer_id, row);
+  }
+
+  for (const segment of plan.raw) {
+    // eslint-disable-next-line no-await-in-loop -- at most two segments.
+    const rows = await rawByOffer(scope, segment.from, segment.to);
+    for (const row of rows) put(row.offer_id, row);
+  }
+
+  return { byOffer, source: plan.snapshot ? 'rollup' : 'raw', coveredDay: covered };
+}
+
+/** Per-offer counters straight from the event tables, for one segment. */
+async function rawByOffer(scope, from, to) {
+  const window = [from, to];
+  const [views, saves, claims] = await Promise.all([
+    rawQuery(
+      `SELECT v.offer_id,
+              SUM(v.event_type = 'impression') AS impressions,
+              SUM(v.event_type = 'view')       AS views,
+              SUM(v.event_type = 'click')      AS clicks,
+              SUM(v.event_type = 'share')      AS shares
+         FROM offer_views v JOIN offers o ON o.id = v.offer_id
+        WHERE v.created_at BETWEEN ? AND ?${scope.sql}
+        GROUP BY v.offer_id`,
+      [...window, ...scope.params],
+    ),
+    rawQuery(
+      `SELECT f.offer_id, COUNT(*) AS saves
+         FROM favorites f JOIN offers o ON o.id = f.offer_id
+        WHERE f.created_at BETWEEN ? AND ?${scope.sql}
+        GROUP BY f.offer_id`,
+      [...window, ...scope.params],
+    ),
+    rawQuery(
+      `SELECT c.offer_id, COUNT(*) AS claims,
+              COALESCE(SUM(c.status = 'redeemed'), 0) AS redemptions
+         FROM offer_claims c JOIN offers o ON o.id = c.offer_id
+        WHERE c.claimed_at BETWEEN ? AND ?${scope.sql}
+        GROUP BY c.offer_id`,
+      [...window, ...scope.params],
+    ),
+  ]);
+  return [...views, ...saves, ...claims];
+}
+
+/** Zeroes, for an offer the roll-up has never seen. */
+const zeroFor = () => zeroTotals();
+
 module.exports = {
   METRICS,
+  engagementByOffer,
+  zeroFor,
   coverageDay,
   planWindow,
   engagementTotals,

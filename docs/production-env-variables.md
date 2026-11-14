@@ -2,7 +2,7 @@
 
 Every variable the backend reads, what it does in production, and whether you
 have to set it. Derived from the code (`grep process.env` across `src/` and
-`scripts/`), not from memory — 89 variables, all listed.
+`scripts/`), not from memory — 90 variables, all listed.
 
 **This file contains no real values and must never contain any.** Placeholders
 are written `<...>`. Real production credentials belong in `.env.production` on
@@ -221,14 +221,21 @@ to clean up an image whose thumbnail failed to upload.
 
 | Variable | Status | Default | Notes |
 |---|---|---|---|
-| `ANALYTICS_RETENTION_DAYS` | Optional | `400` | How long raw analytics events are kept. **Startup is refused below 395.** |
+| `ANALYTICS_RETENTION_DAYS` | Optional | `400` | `analytics_events` and `offer_views`. **Startup is refused below 395.** |
+| `VISIBILITY_RETENTION_DAYS` | Optional | `90` | `visibility_events` — the impression firehose. **Startup is refused below 90.** |
 
-Not an ordinary tuning knob: the dashboards serve windows up to
-`MAX_QUERY_DAYS` (365 days), and retention shorter than that would make a
-twelve-month chart silently zero for its earliest months. `config/analyticsRetention.js`
-asserts `ANALYTICS_RETENTION_DAYS >= MAX_QUERY_DAYS + 30` at boot, so the
-mistake is a failed start rather than a wrong chart found a year later. To go
-lower, lower `MAX_QUERY_DAYS` and the dashboards with it.
+Not ordinary tuning knobs. Each table's retention has to be longer than the
+window its own dashboards accept, or a chart goes silently zero for its
+earliest months — a deleted number presented as a measured one.
+`config/analyticsRetention.js` asserts that per table at boot, so the mistake
+is a failed start rather than a wrong chart found a year later.
+
+The two numbers differ because the tables do. `visibility_events` costs 1,094
+bytes a row against 314 for `offer_views`, and takes a row per impression
+rather than per offer opened, so it was most of the storage bill on its own.
+Capping its dashboards to 60 days is what lets it keep 90 instead of 400.
+To go lower on either, lower that table's `maxQueryDays` and the routes that
+read it.
 
 The nightly `analytics-retention` job at 04:15 enforces it: `DROP PARTITION`
 for `visibility_events`, batched deletes for `analytics_events` and

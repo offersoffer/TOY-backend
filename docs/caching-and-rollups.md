@@ -86,15 +86,54 @@ first day (3 failures) and re-reading the boundary day (4 failures).
    `coverageDay` independently refuses to trust a day that is not over, so
    neither side depends on the other being right.
 
-### What this does *not* yet allow
+### Four more dashboards converted, and what the comparison found
 
-**Retention stays at 400 days.** Lowering it needs the remaining raw readers
-converted too: `/analytics/locations`, `/analytics/categories`,
-`premium.locationInsights`, `radiusAnalysis`, `customerInsights`, `acquisition`
-and `offerPerformance` all still read raw events over the full window, and
-several ask questions the snapshot cannot answer — city and category
-breakdowns, and distinct-customer counts, which cannot be summed across days.
-Converting the count metrics was the cheap, correct half.
+`funnel`, `offerPerformance`, `overviewAlerts` and `offerComparison` now read
+the roll-up too. `offerPerformance` was the expensive one: **seven correlated
+scalar subqueries per offer**, each its own scan of `offer_views`, `favorites`
+or `offer_claims`. It is now one grouped read of the roll-up's per-offer rows
+plus one read of `offers` for metadata.
+
+Verified by running the pre-conversion module and the new one side by side
+against the same database — 100,000 events over 100 days, 40 offers — across
+3 ranges × 5 filter sets × 2 scopes:
+
+| | |
+|---|---|
+| Every KPI, total, timeline point, and which alerts fire | **identical** |
+| Offer table sorted by views, claims, redemptions, saves, newest | **identical** |
+| Offer table sorted by **conversion** | differs in 4 of 30 — see below |
+
+**The conversion sort is a fix, not a regression.** The old query ordered
+`claims DESC` in SQL, applied `LIMIT 20`, and only then re-sorted those twenty
+by conversion rate — so an offer with excellent conversion but few claims never
+reached the list it was supposed to top. The new code sorts the whole scoped
+set by conversion and then limits, which is what `sort=conversion` means.
+
+**Two ties were being broken by the optimiser.** On seeded data Monday and
+Thursday both had exactly 431 views, and several offers had identical counts.
+`ORDER BY … LIMIT 1` promises nothing in that case, so the "busiest weekday"
+alert and the offer table's order could legitimately change between two loads
+of identical data. Both now break ties explicitly — weekday order, and offer
+id — which is why the comparison still shows a difference there: the old side
+was arbitrary, the new one is not.
+
+### What is still raw, and why
+
+Three things a daily roll-up cannot answer, all left on raw events
+deliberately:
+
+- **city breakdowns** (`locationInsights`, the `top-location` alert) — the
+  snapshot has no city dimension;
+- **radius and distance analysis** — needs each event's own coordinates;
+- **hour-of-day** (`bestTimeToPost`) — a daily row has no hours in it;
+- **distinct customers over a window** — daily distinct counts cannot be added
+  up. Most of these already read `shop_customers`, which is not an event table
+  and so not affected by retention at all.
+
+All of them read `offer_views` or `analytics_events`, which is why those two
+tables keep 400 days. At 314 and 503 bytes a row they are not what the storage
+bill was made of — see `docs/analytics-retention.md` §1a.
 
 ---
 

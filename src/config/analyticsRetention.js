@@ -1,5 +1,12 @@
 'use strict';
 
+/** Local copy of env.js's integer reader: this file must not require env.js,
+ *  which requires this one for its startup assertion. */
+const int = (value, fallback) => {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
 /**
  * How long raw analytics events are kept, and the rule that keeps that number
  * honest.
@@ -28,64 +35,136 @@
  */
 
 /**
- * The longest window any dashboard may ask for, in days.
+ * The retention and query horizons, **per table**.
  *
- * 365 because `config/businessMetrics.js` offers a 12-Month retention cohort
- * and the analytics routes accept `days` up to a year. Raising it means raising
- * `ANALYTICS_RETENTION_DAYS` too, and the assertion below enforces that.
+ * One number for all three was forcing the worst case onto the cheapest
+ * tables. Measured on disk at identical row counts of 200,000:
+ *
+ * | table | bytes/row | gets a row when |
+ * |---|---|---|
+ * | `visibility_events` | **1,094** | every impression - about 20 per feed render |
+ * | `analytics_events` | 503 | a tracked action happens |
+ * | `offer_views` | 314 | somebody opens an offer |
+ *
+ * So `visibility_events` is the storage problem almost on its own: three and a
+ * half times the row cost, and one to two orders of magnitude more rows. Its
+ * only long-window reader is the merchant visibility dashboard - everything
+ * else that touches it (ranking, fairness, frequency caps, anti-manipulation)
+ * works in hours. Capping that one dashboard to 90 days is what lets the
+ * firehose keep 90 days instead of 400.
+ *
+ * `offer_views` and `analytics_events` stay at 400 because seven premium
+ * dashboards still read them over a full year; see `docs/caching-and-rollups.md`
+ * for which, and what converting them would take.
+ *
+ * `maxQueryDays` is what the routes validate against, and
+ * `assertHorizonsAreServable` refuses to start if any table's retention cannot
+ * answer the window its own readers accept. Neither number can move without
+ * the other noticing.
  */
-const MAX_QUERY_DAYS = 365;
+const TABLES = {
+  visibility_events: {
+    column: 'created_at',
+    retentionDays: int(process.env.VISIBILITY_RETENTION_DAYS, 90),
+    maxQueryDays: 60,
+    // Monthly partitions: retention is a DROP PARTITION, never a row delete.
+    managedBy: 'partitions',
+  },
+  analytics_events: {
+    column: 'created_at',
+    retentionDays: int(process.env.ANALYTICS_RETENTION_DAYS, 400),
+    maxQueryDays: 365,
+    managedBy: 'delete',
+  },
+  offer_views: {
+    column: 'created_at',
+    retentionDays: int(process.env.ANALYTICS_RETENTION_DAYS, 400),
+    maxQueryDays: 365,
+    managedBy: 'delete',
+  },
+};
 
 /**
- * The margin between the two. A year of retention and a year of query window
- * would mean the oldest day a merchant can ask for is the same day the prune
- * job is deleting, and which of the two ran first would decide what the chart
- * showed.
+ * The longest window the **offer** dashboards may ask for.
+ *
+ * Kept as the headline number because it is what `/analytics` and
+ * `/analytics/premium` validate against, and what the roll-up has to be able
+ * to answer. The visibility dashboards have their own, lower limit.
+ */
+const MAX_QUERY_DAYS = TABLES.offer_views.maxQueryDays;
+
+/** The visibility dashboards' limit, which is lower on purpose. */
+const MAX_VISIBILITY_QUERY_DAYS = TABLES.visibility_events.maxQueryDays;
+
+/**
+ * The margin between a table's retention and the window its readers accept. A
+ * year of retention and a year of window would mean the oldest day a merchant
+ * can ask for is the same day the prune job is deleting, and which ran first
+ * would decide what the chart showed.
  */
 const MIN_MARGIN_DAYS = 30;
 
-/**
- * The tables pruned by deleting rows, with the column each one dates them by.
- *
- * `visibility_events` is deliberately not here. It is partitioned by month, and
- * a partitioned table must have whole partitions dropped rather than rows
- * deleted - measured, batched deletion against it runs at 4,585 rows a second
- * where the same unpartitioned table managed 31,000, because every statement
- * has to consider every partition. `services/analyticsPartitions.js` owns it,
- * and `PARTITIONED_TABLES` names it so the two cannot both claim it.
- */
-const EVENT_TABLES = [
-  { table: 'analytics_events', column: 'created_at' },
-  { table: 'offer_views', column: 'created_at' },
-];
+/** Tables pruned by deleting rows, with the column each one dates them by. */
+const EVENT_TABLES = Object.entries(TABLES)
+  .filter(([, spec]) => spec.managedBy === 'delete')
+  .map(([table, spec]) => ({ table, column: spec.column }));
 
 /**
  * Tables whose retention is a DROP PARTITION rather than a DELETE.
  *
  * Kept as a list rather than assumed, because the fallback matters: on a
  * database where the conversion has not run yet the table is still a plain
- * table, and something has to prune it in the meantime. `retentionFor` below
- * is what decides, per table, at runtime.
+ * table, and something has to prune it in the meantime.
  */
-const PARTITIONED_TABLES = [{ table: 'visibility_events', column: 'created_at' }];
+const PARTITIONED_TABLES = Object.entries(TABLES)
+  .filter(([, spec]) => spec.managedBy === 'partitions')
+  .map(([table, spec]) => ({ table, column: spec.column }));
 
 /**
- * `search_history` is deliberately absent. `recommendations.rememberSearch`
+ * `search_history` is absent from both. `recommendations.rememberSearch`
  * already trims each user to their 20 most recent terms on every insert, so it
  * is bounded by user count rather than by time, and a date-based prune would
  * fight that rule rather than help it.
  */
 
+/** How long a given table keeps its rows. */
+function retentionFor(table) {
+  const spec = TABLES[table];
+  if (!spec) throw new Error(`No retention configured for ${table}`);
+  return spec.retentionDays;
+}
+
 /**
- * @throws when retention is configured too low to answer what the API accepts.
+ * Every table's retention, checked against the window its own readers accept.
+ *
+ * @throws when any table is configured too low to answer what its routes take.
  */
-function assertWindowIsServable(retentionDays) {
-  const floor = MAX_QUERY_DAYS + MIN_MARGIN_DAYS;
+function assertHorizonsAreServable() {
+  for (const [table, spec] of Object.entries(TABLES)) {
+    const floor = spec.maxQueryDays + MIN_MARGIN_DAYS;
+    if (!Number.isFinite(spec.retentionDays) || spec.retentionDays < floor) {
+      throw new Error(
+        `Retention for ${table} is ${spec.retentionDays}, but its dashboards serve windows up to ` +
+          `${spec.maxQueryDays} days and need ${MIN_MARGIN_DAYS} days of margin. ` +
+          `Set it to at least ${floor}, or lower maxQueryDays for ${table} in ` +
+          'config/analyticsRetention.js and the routes that read it.',
+      );
+    }
+  }
+}
+
+/**
+ * The per-table form, for a caller that has one number in hand.
+ *
+ * @throws when `retentionDays` cannot answer `maxQueryDays` for that table.
+ */
+function assertWindowIsServable(retentionDays, maxQueryDays = MAX_QUERY_DAYS) {
+  const floor = maxQueryDays + MIN_MARGIN_DAYS;
   if (!Number.isFinite(retentionDays) || retentionDays < floor) {
     throw new Error(
-      `ANALYTICS_RETENTION_DAYS is ${retentionDays}, but the dashboards serve windows up to ` +
-        `${MAX_QUERY_DAYS} days and need ${MIN_MARGIN_DAYS} days of margin. Set it to at least ${floor}, ` +
-        'or lower MAX_QUERY_DAYS in config/analyticsRetention.js and the dashboards with it.',
+      `Retention is ${retentionDays}, but the dashboards serve windows up to ${maxQueryDays} days ` +
+        `and need ${MIN_MARGIN_DAYS} days of margin. Set it to at least ${floor}, or lower ` +
+        'maxQueryDays in config/analyticsRetention.js and the dashboards with it.',
     );
   }
 }
@@ -114,6 +193,10 @@ function isWithinRetention(from, retentionDays, now = new Date()) {
 }
 
 module.exports = {
+  TABLES,
+  MAX_VISIBILITY_QUERY_DAYS,
+  retentionFor,
+  assertHorizonsAreServable,
   MAX_QUERY_DAYS,
   MIN_MARGIN_DAYS,
   EVENT_TABLES,

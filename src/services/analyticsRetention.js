@@ -121,13 +121,15 @@ async function pruneTable({ table, column }, days, budget = DEFAULT_BUDGET) {
  * database and three concurrent delete storms would be the stall that batching
  * exists to avoid.
  */
-async function pruneAll(days, budget = DEFAULT_BUDGET) {
-  config.assertWindowIsServable(days);
+async function pruneAll(budget = DEFAULT_BUDGET) {
+  config.assertHorizonsAreServable();
 
   const results = [];
   for (const target of config.EVENT_TABLES) {
+    // Each table keeps its rows for as long as its own readers need, which is
+    // not the same number for all of them.
     // eslint-disable-next-line no-await-in-loop -- see above.
-    results.push(await pruneTable(target, days, budget));
+    results.push(await pruneTable(target, config.retentionFor(target.table), budget));
   }
 
   const behind = results.filter((r) => r.budgetSpent);
@@ -136,7 +138,6 @@ async function pruneAll(days, budget = DEFAULT_BUDGET) {
       {
         event: 'ANALYTICS_RETENTION_BEHIND',
         category: 'DATABASE',
-        retention_days: days,
         tables: behind.map((r) => ({ table: r.table, remaining: r.remaining })),
       },
       'Analytics retention spent its budget before clearing the backlog',
@@ -144,7 +145,6 @@ async function pruneAll(days, budget = DEFAULT_BUDGET) {
   }
 
   return {
-    retentionDays: days,
     deleted: results.reduce((sum, r) => sum + r.deleted, 0),
     perTable: results,
   };
@@ -162,11 +162,11 @@ async function pruneAll(days, budget = DEFAULT_BUDGET) {
  * still a plain table, it is pruned by deletion like the others rather than
  * left to grow because a migration has not happened yet.
  */
-async function run(days = env.analytics.retentionDays, budget = DEFAULT_BUDGET) {
-  config.assertWindowIsServable(days);
+async function run(budget = DEFAULT_BUDGET) {
+  config.assertHorizonsAreServable();
 
-  const partitionWork = await partitions.maintain(days);
-  const deleted = await pruneAll(days, budget);
+  const partitionWork = await partitions.maintain();
+  const deleted = await pruneAll(budget);
 
   const fallbacks = [];
   for (const target of config.PARTITIONED_TABLES) {
@@ -181,11 +181,13 @@ async function run(days = env.analytics.retentionDays, budget = DEFAULT_BUDGET) 
       `${target.table} is not partitioned yet; pruning it by deletion instead`,
     );
     // eslint-disable-next-line no-await-in-loop -- see above.
-    fallbacks.push(await pruneTable(target, days, budget));
+    fallbacks.push(await pruneTable(target, config.retentionFor(target.table), budget));
   }
 
   return {
-    retentionDays: days,
+    retentionDays: Object.fromEntries(
+      Object.entries(config.TABLES).map(([table, spec]) => [table, spec.retentionDays]),
+    ),
     partitions: partitionWork,
     deleted: deleted.deleted + fallbacks.reduce((sum, r) => sum + r.deleted, 0),
     perTable: [...deleted.perTable, ...fallbacks],

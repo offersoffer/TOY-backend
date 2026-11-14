@@ -295,20 +295,24 @@ async function overviewAlerts(context) {
   const { from, to } = context.range;
   const alerts = [];
 
-  const [endingToday, overperformer, topLocation, bestDay] = await Promise.all([
+  const [endingToday, byOffer, topLocation, timeline] = await Promise.all([
     rawQuery(
       `SELECT COUNT(*) AS count FROM offers o
         WHERE o.status = 'active' AND o.end_date BETWEEN NOW() AND DATE_ADD(NOW(), INTERVAL 1 DAY)
           ${scope.sql}`,
       scope.params,
     ),
-    rawQuery(
-      `SELECT o.id, o.title, COUNT(*) AS views
-         FROM offer_views v JOIN offers o ON o.id = v.offer_id
-        WHERE v.event_type = 'view' AND v.created_at BETWEEN ? AND ?${scope.sql}
-        GROUP BY o.id, o.title ORDER BY views DESC LIMIT 5`,
-      [from, to, ...scope.params],
-    ),
+    // Top offers by views: the roll-up's per-offer rows answer this directly.
+    analyticsRollup.engagementByOffer({ scope, from, to }),
+    /*
+     * The one read here that the roll-up cannot answer.
+     *
+     * `analytics_daily_snapshots` has no city dimension, and adding one is a
+     * schema change with its own backfill. It stays on `offer_views`, which is
+     * acceptable: at 314 bytes a row that table is the cheapest of the three
+     * and is not what forced retention down - see config/analyticsRetention.js
+     * for the measurements.
+     */
     rawQuery(
       `SELECT v.city, COUNT(*) AS views
          FROM offer_views v JOIN offers o ON o.id = v.offer_id
@@ -316,13 +320,9 @@ async function overviewAlerts(context) {
         GROUP BY v.city ORDER BY views DESC LIMIT 1`,
       [from, to, ...scope.params],
     ),
-    rawQuery(
-      `SELECT DAYNAME(v.created_at) AS day_name, COUNT(*) AS views
-         FROM offer_views v JOIN offers o ON o.id = v.offer_id
-        WHERE v.event_type = 'view' AND v.created_at BETWEEN ? AND ?${scope.sql}
-        GROUP BY day_name ORDER BY views DESC LIMIT 1`,
-      [from, to, ...scope.params],
-    ),
+    // Busiest weekday: the roll-up is per day, so the day name is a property
+    // of a row it already has rather than something only raw events know.
+    analyticsRollup.engagementTimeline({ scope, from, to }),
   ]);
 
   if (num(endingToday[0].count) > 0) {
@@ -334,21 +334,42 @@ async function overviewAlerts(context) {
     });
   }
 
+  /*
+   * The top five offers by views, from the roll-up's per-offer rows.
+   *
+   * The old query carried `o.title` along with the count; the roll-up has ids
+   * and numbers, so the titles are fetched for the five that won rather than
+   * joined across every offer in scope.
+   */
+  const overperformer = [...byOffer.byOffer.entries()]
+    .map(([id, totals]) => ({ id, views: totals.views }))
+    // Only offers that were actually viewed. The query this replaced filtered
+    // `v.event_type = 'view'`, so an offer with saves or claims but no views
+    // never appeared - and including it here pulled the average of "your top
+    // offers" down and inflated the percentage the alert reports.
+    .filter((row) => row.views > 0)
+    // Tie on the id, for the reason the offer table gives above.
+    .sort((a, b) => b.views - a.views || a.id - b.id)
+    .slice(0, 5);
+
   // "Above average" is measured against the mean of the offers in view, so the
   // claim is arithmetic rather than a guess.
   if (overperformer.length > 1) {
-    const values = overperformer.map((row) => num(row.views));
+    const values = overperformer.map((row) => row.views);
     const average = values.reduce((sum, value) => sum + value, 0) / values.length;
     const best = overperformer[0];
-    const above = average > 0 ? Math.round(((num(best.views) - average) / average) * 100) : 0;
+    const above = average > 0 ? Math.round(((best.views - average) / average) * 100) : 0;
     if (above >= 10) {
-      alerts.push({
-        key: 'top-offer',
-        icon: '🔥',
-        tone: 'success',
-        message: `Your "${best.title}" offer is performing ${above}% above the average of your top offers.`,
-        entityId: Number(best.id),
-      });
+      const [titleRow] = await rawQuery('SELECT title FROM offers WHERE id = ?', [best.id]);
+      if (titleRow) {
+        alerts.push({
+          key: 'top-offer',
+          icon: '🔥',
+          tone: 'success',
+          message: `Your "${titleRow.title}" offer is performing ${above}% above the average of your top offers.`,
+          entityId: Number(best.id),
+        });
+      }
     }
   }
 
@@ -361,12 +382,40 @@ async function overviewAlerts(context) {
     });
   }
 
-  if (bestDay.length) {
+  /*
+   * The busiest weekday, summed across every occurrence of it in the window -
+   * which is what `GROUP BY DAYNAME(created_at)` did.
+   *
+   * The day names are derived in UTC, matching the roll-up's day keys and the
+   * `+00:00` session the pool pins. `DAYNAME()` would have used the session
+   * zone too, so this is the same answer by the same clock.
+   */
+  const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const viewsByWeekday = new Map();
+  for (const [day, totals] of timeline.byDay) {
+    const name = DAY_NAMES[new Date(`${day}T00:00:00Z`).getUTCDay()];
+    viewsByWeekday.set(name, (viewsByWeekday.get(name) ?? 0) + totals.views);
+  }
+  /*
+   * Ties are broken by weekday order, deliberately.
+   *
+   * The query this replaced ended `ORDER BY views DESC LIMIT 1`, and MySQL
+   * makes no promise about which row it returns when two weekdays are level -
+   * verified on a seeded shop where Monday and Thursday both had exactly 431
+   * views and the alert could legitimately have named either. An alert that
+   * changes wording between two page loads on identical data reads as a bug,
+   * so the order is pinned here rather than left to the optimiser.
+   */
+  const bestDay = [...viewsByWeekday.entries()]
+    .filter(([, views]) => views > 0)
+    .sort((a, b) => b[1] - a[1] || DAY_NAMES.indexOf(a[0]) - DAY_NAMES.indexOf(b[0]))[0];
+
+  if (bestDay) {
     alerts.push({
       key: 'best-day',
       icon: '💡',
       tone: 'info',
-      message: `${bestDay[0].day_name} offers received the most views in this period.`,
+      message: `${bestDay[0]} offers received the most views in this period.`,
     });
   }
 
@@ -387,61 +436,47 @@ async function overviewAlerts(context) {
 async function offerPerformance(context, { limit = 50, sort = 'views' } = {}) {
   const scope = offerScope(context);
   const { from, to } = context.range;
-  const window = [from, to];
 
-  // Conversion is a ratio of two subquery aliases, so it is ordered in JS below
-  // rather than pushed into SQL as a third pass over the event tables.
-  const sortColumn =
-    {
-      views: 'views DESC',
-      claims: 'claims DESC',
-      redemptions: 'redemptions DESC',
-      conversion: 'claims DESC',
-      saves: 'saves DESC',
-      newest: 'o.created_at DESC',
-    }[sort] ?? 'views DESC';
-
-  // Correlated scalar subqueries rather than joins onto the event tables: a
-  // join would multiply each offer by its claims and inflate every view count.
-  const rows = await rawQuery(
-    `SELECT o.id, o.title, o.status, o.offer_type, o.discount_type, o.discount_value,
-            o.start_date, o.end_date, s.name AS shop_name,
-            c.name AS category_name,
-            (SELECT COALESCE(SUM(v.event_type = 'impression'), 0) FROM offer_views v
-              WHERE v.offer_id = o.id AND v.created_at BETWEEN ? AND ?) AS impressions,
-            (SELECT COALESCE(SUM(v.event_type = 'view'), 0) FROM offer_views v
-              WHERE v.offer_id = o.id AND v.created_at BETWEEN ? AND ?) AS views,
-            (SELECT COALESCE(SUM(v.event_type = 'share'), 0) FROM offer_views v
-              WHERE v.offer_id = o.id AND v.created_at BETWEEN ? AND ?) AS shares,
-            (SELECT COALESCE(SUM(v.event_type = 'click'), 0) FROM offer_views v
-              WHERE v.offer_id = o.id AND v.created_at BETWEEN ? AND ?) AS clicks,
-            (SELECT COUNT(*) FROM favorites f
-              WHERE f.offer_id = o.id AND f.created_at BETWEEN ? AND ?) AS saves,
-            (SELECT COUNT(*) FROM offer_claims cc
-              WHERE cc.offer_id = o.id AND cc.claimed_at BETWEEN ? AND ?) AS claims,
-            (SELECT COALESCE(SUM(cc.status = 'redeemed'), 0) FROM offer_claims cc
-              WHERE cc.offer_id = o.id AND cc.claimed_at BETWEEN ? AND ?) AS redemptions
-       FROM offers o
-       JOIN shops s ON s.id = o.shop_id
-       LEFT JOIN categories c ON c.id = o.category_id
-      WHERE 1 = 1${scope.sql}
-      ORDER BY ${sortColumn}
-      LIMIT ${Number(limit)}`,
-    [
-      ...window, ...window, ...window, ...window,
-      ...window, ...window, ...window,
-      ...scope.params,
-    ],
-  );
+  /*
+   * This was seven correlated scalar subqueries per offer - each one its own
+   * scan of `offer_views`, `favorites` or `offer_claims` over the offer's
+   * window - which made it the most expensive query on the dashboard.
+   *
+   * Now the counters come from the roll-up's per-offer rows in one grouped
+   * read, and the offer metadata comes from `offers` in another. Ordering and
+   * the limit move to JS as a consequence, which is not a behaviour change:
+   * MySQL also had to compute every scoped offer's counters before it could
+   * order by them, so the same rows were always being visited.
+   *
+   * Starting from `offers` rather than from the counters is deliberate. An
+   * offer with no activity has no roll-up row, and listing only offers that
+   * had events would quietly drop the quiet ones from a performance table
+   * whose whole purpose is to show which offers are not working.
+   */
+  const [engagement, rows] = await Promise.all([
+    analyticsRollup.engagementByOffer({ scope, from, to }),
+    rawQuery(
+      `SELECT o.id, o.title, o.status, o.offer_type, o.discount_type, o.discount_value,
+              o.start_date, o.end_date, o.created_at, s.name AS shop_name,
+              c.name AS category_name
+         FROM offers o
+         JOIN shops s ON s.id = o.shop_id
+         LEFT JOIN categories c ON c.id = o.category_id
+        WHERE 1 = 1${scope.sql}`,
+      scope.params,
+    ),
+  ]);
 
   const offers = rows.map((row) => {
-    const views = num(row.views);
-    const saves = num(row.saves);
-    const claims = num(row.claims);
-    const redemptions = num(row.redemptions);
-    const impressions = num(row.impressions);
+    const totals = engagement.byOffer.get(Number(row.id)) ?? analyticsRollup.zeroFor();
+    const views = totals.views;
+    const saves = totals.saves;
+    const claims = totals.claims;
+    const redemptions = totals.redemptions;
+    const impressions = totals.impressions;
 
     return {
+      createdAt: row.created_at,
       id: Number(row.id),
       title: row.title,
       status: row.status,
@@ -454,8 +489,8 @@ async function offerPerformance(context, { limit = 50, sort = 'views' } = {}) {
       endDate: row.end_date,
       impressions,
       views,
-      clicks: num(row.clicks),
-      shares: num(row.shares),
+      clicks: totals.clicks,
+      shares: totals.shares,
       saves,
       claims,
       redemptions,
@@ -466,14 +501,44 @@ async function offerPerformance(context, { limit = 50, sort = 'views' } = {}) {
         claimToRedemption: rate(redemptions, claims),
         viewToRedemption: rate(redemptions, views),
         // Any interaction beyond a passive view, over views.
-        engagement: rate(saves + claims + num(row.shares) + num(row.clicks), views),
+        engagement: rate(saves + claims + totals.shares + totals.clicks, views),
       },
     };
   });
 
-  if (sort === 'conversion') {
-    offers.sort((a, b) => (b.rates.viewToClaim ?? -1) - (a.rates.viewToClaim ?? -1));
-  }
+  /*
+   * The ordering and the limit SQL used to do.
+   *
+   * It has to happen *before* `totals` below, because `totals` is the sum over
+   * the rows being returned - it was the sum of the LIMITed set before this
+   * change and has to stay that, or the table's footer would stop matching its
+   * own rows.
+   *
+   * `conversion` was already sorted here, for the reason the old comment gave:
+   * it is a ratio of two aggregates rather than a column.
+   */
+  const SORTS = {
+    views: (a, b) => b.views - a.views,
+    claims: (a, b) => b.claims - a.claims,
+    redemptions: (a, b) => b.redemptions - a.redemptions,
+    saves: (a, b) => b.saves - a.saves,
+    conversion: (a, b) => (b.rates.viewToClaim ?? -1) - (a.rates.viewToClaim ?? -1),
+    newest: (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
+  };
+  /*
+   * Ties break on the offer id, so the table does not reshuffle between two
+   * loads of identical data.
+   *
+   * `ORDER BY views DESC LIMIT 20` promised nothing about offers with equal
+   * counts, and on seeded data several had exactly the same figures. That was
+   * invisible while the ordering happened in SQL and would have become a
+   * "the list keeps changing" report once it moved here.
+   */
+  const chosen = SORTS[sort] ?? SORTS.views;
+  offers.sort((a, b) => chosen(a, b) || a.id - b.id);
+  offers.splice(Number(limit));
+  // Metadata only: it drove the `newest` sort and has no place in the payload.
+  for (const offer of offers) delete offer.createdAt;
 
   const sum = (key) => offers.reduce((total, offer) => total + offer[key], 0);
   const totals = {
@@ -509,36 +574,18 @@ async function offerPerformance(context, { limit = 50, sort = 'views' } = {}) {
 async function funnel(context) {
   const scope = offerScope(context);
   const { from, to } = context.range;
-  const window = [from, to];
 
-  const [events, saves, claims] = await Promise.all([
-    rawQuery(
-      `SELECT v.event_type, COUNT(*) AS count
-         FROM offer_views v JOIN offers o ON o.id = v.offer_id
-        WHERE v.created_at BETWEEN ? AND ?${scope.sql}
-        GROUP BY v.event_type`,
-      [...window, ...scope.params],
-    ),
-    rawQuery(
-      `SELECT COUNT(*) AS count FROM favorites f JOIN offers o ON o.id = f.offer_id
-        WHERE f.created_at BETWEEN ? AND ?${scope.sql}`,
-      [...window, ...scope.params],
-    ),
-    rawQuery(
-      `SELECT COUNT(*) AS claims, COALESCE(SUM(c.status = 'redeemed'), 0) AS redemptions
-         FROM offer_claims c JOIN offers o ON o.id = c.offer_id
-        WHERE c.claimed_at BETWEEN ? AND ?${scope.sql}`,
-      [...window, ...scope.params],
-    ),
-  ]);
+  // Every stage of this funnel is one of the seven counters the daily roll-up
+  // holds, so the whole thing is one call: the roll-up for the whole days
+  // inside the window, raw events for the partial day at each end.
+  const engagement = await analyticsRollup.engagementTotals({ scope, from, to });
 
-  const byType = Object.fromEntries(events.map((row) => [row.event_type, num(row.count)]));
   const stageValues = {
-    impressions: byType.impression ?? 0,
-    views: byType.view ?? 0,
-    saves: num(saves[0].count),
-    claims: num(claims[0].claims),
-    redemptions: num(claims[0].redemptions),
+    impressions: engagement.impressions,
+    views: engagement.views,
+    saves: engagement.saves,
+    claims: engagement.claims,
+    redemptions: engagement.redemptions,
   };
 
   /**
@@ -1227,27 +1274,34 @@ async function offerComparison(context, offerIds) {
   const branch = branchFilter(context.filters);
   const scope = { sql: shops.sql + branch.sql, params: [...shops.params, ...branch.params] };
   const { from, to } = context.range;
-  const window = [from, to];
 
-  const rows = await rawQuery(
-    `SELECT o.id, o.title, o.offer_type, o.discount_type, o.discount_value, o.status,
-            COALESCE(SUM(v.event_type = 'view'), 0)       AS views,
-            COALESCE(SUM(v.event_type = 'impression'), 0) AS impressions,
-            COALESCE(SUM(v.event_type = 'share'), 0)      AS shares,
-            (SELECT COUNT(*) FROM favorites f
-              WHERE f.offer_id = o.id AND f.created_at BETWEEN ? AND ?) AS saves,
-            (SELECT COUNT(*) FROM offer_claims c
-              WHERE c.offer_id = o.id AND c.claimed_at BETWEEN ? AND ?) AS claims,
-            (SELECT COALESCE(SUM(c.status = 'redeemed'), 0) FROM offer_claims c
-              WHERE c.offer_id = o.id AND c.claimed_at BETWEEN ? AND ?) AS redemptions
-       FROM offers o
-       LEFT JOIN offer_views v ON v.offer_id = o.id AND v.created_at BETWEEN ? AND ?
-      WHERE o.id IN (${offerIds.map(() => '?').join(',')})${scope.sql}
-      GROUP BY o.id, o.title, o.offer_type, o.discount_type, o.discount_value, o.status`,
-    [...window, ...window, ...window, ...window, ...offerIds, ...scope.params],
-  );
+  /*
+   * The counters come from the roll-up's per-offer rows; the metadata and the
+   * authorisation check stay in SQL.
+   *
+   * Narrowing the roll-up read to the named offers as well as the scope keeps
+   * it from aggregating every offer in the shop to answer a question about
+   * two or three - and the `o.id IN (...)` on the metadata query is still what
+   * decides which offers the caller may see at all.
+   */
+  const named = {
+    sql: `${scope.sql} AND o.id IN (${offerIds.map(() => '?').join(',')})`,
+    params: [...scope.params, ...offerIds],
+  };
 
-  const offers = rows.map((row) => {
+  const [engagement, rows] = await Promise.all([
+    analyticsRollup.engagementByOffer({ scope: named, from, to }),
+    rawQuery(
+      `SELECT o.id, o.title, o.offer_type, o.discount_type, o.discount_value, o.status
+         FROM offers o
+        WHERE o.id IN (${offerIds.map(() => '?').join(',')})${scope.sql}`,
+      [...offerIds, ...scope.params],
+    ),
+  ]);
+
+  const offers = rows.map((metadata) => {
+    const totals = engagement.byOffer.get(Number(metadata.id)) ?? analyticsRollup.zeroFor();
+    const row = { ...metadata, ...totals };
     const views = num(row.views);
     const claims = num(row.claims);
     return {

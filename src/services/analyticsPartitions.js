@@ -2,7 +2,7 @@
 
 const { rawQuery, execute } = require('../db/pool');
 const logger = require('../utils/logger');
-const env = require('../config/env');
+const retentionConfig = require('../config/analyticsRetention');
 
 /**
  * Monthly range partitions on `visibility_events`, and the two jobs that keep
@@ -235,7 +235,7 @@ async function scrubUser(userId) {
 }
 
 /** Both maintenance halves, in the only order that is safe. */
-async function maintain(retentionDays = env.analytics.retentionDays, now = new Date()) {
+async function maintain(retentionDays = retentionConfig.retentionFor(TABLE), now = new Date()) {
   // Create first. If dropping ran first and failed, the table would still have
   // its future months; if creating ran second and failed, inserts would land in
   // the catch-all and make the next reorganise expensive.

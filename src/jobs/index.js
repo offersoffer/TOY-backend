@@ -247,7 +247,7 @@ const jobs = [
      */
     schedule: '15 4 * * *',
     run: async () => {
-      const result = await analyticsRetention.run(env.analytics.retentionDays);
+      const result = await analyticsRetention.run();
       return {
         processed: result.deleted,
         retention_days: result.retentionDays,
