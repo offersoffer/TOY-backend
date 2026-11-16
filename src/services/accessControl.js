@@ -161,6 +161,36 @@ async function loadAccessContext(userId) {
      */
     canAccessAdmin:
       isSuperAdmin || administeredPermissions.some((name) => MANAGEMENT_PERMISSIONS.includes(name)),
+    /**
+     * True when the user administers any shop **including one still in review**.
+     *
+     * This is the question the web app's admin-area guard actually needs, and
+     * it is not the same question as `canAccessAdmin`.
+     *
+     * `canAccessAdmin` exists to choose between the customer app and the
+     * merchant app on mobile, where a wrong answer is unrecoverable - a seller
+     * mid-registration dropped into the merchant app has no way back to the
+     * customer tabs. Excluding unreviewed shops there is right.
+     *
+     * The web guard borrowed it and turned it into an authorization gate,
+     * which it was never meant to be: the comment above this block says
+     * authorization is per shop and untouched, and so it is - the seller keeps
+     * every permission on their own registration. The result was that
+     * finishing registration offered "Go to my dashboard", the guard refused
+     * it, and the seller landed on the public offers list being told the area
+     * was "for shop administrators" - which they now were.
+     *
+     * Nothing is unlocked by letting them in. Verification gates *publishing*,
+     * in `assertMayPublishListing` and `assertMayActivate`, which is where the
+     * rule belongs and where it stays. Reading the admin area, drafting an
+     * offer and seeing an empty analytics page are exactly what the
+     * onboarding screen already promises a pending seller they can do.
+     *
+     * Built from `effectivePermissions`, which is the same union *without* the
+     * approval filter, so the two answers cannot drift apart.
+     */
+    administersAnyShop:
+      isSuperAdmin || effectivePermissions.some((name) => MANAGEMENT_PERMISSIONS.includes(name)),
   };
 }
 

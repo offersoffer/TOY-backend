@@ -42,6 +42,12 @@ function publicUser(user, context) {
     permissions: context.effectivePermissions,
     isSuperAdmin: context.isSuperAdmin,
     canAccessAdmin: context.canAccessAdmin,
+    /**
+     * Whether the web admin area should admit them. Separate from
+     * `canAccessAdmin`, which mobile uses to pick an entire app; see
+     * `services/accessControl.js` for why they are different questions.
+     */
+    administersAnyShop: context.administersAnyShop,
     /** Shop-scoped roles that are inert until the user is assigned to a shop. */
     unassignedShopRoles: context.unassignedShopRoles,
     shops: context.shops.map((shop) => ({
