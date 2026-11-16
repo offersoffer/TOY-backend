@@ -359,13 +359,25 @@ async function acknowledgeCheckout(shopId, { paymentId, subscriptionId, orderId,
     throw ApiError.badRequest('This payment belongs to a different subscription.');
   }
 
+  /*
+   * The price of the plan being *bought*, not the price currently stored.
+   *
+   * `subscription.price` is what the shop pays today, which during an upgrade
+   * is the old plan - zero when upgrading from Free. The row written here is
+   * the merchant's billing history, so it has to say what this payment is for.
+   * Seen on a real ₹999 test charge recorded as ₹2,500 because that was the
+   * stale stored price.
+   */
+  const buyingPlan = subscription.checkoutPlan ?? subscription.plan;
+  const planPrice = plans.PLANS[buyingPlan]?.price ?? subscription.price;
+
   await recordTransaction({
     shopId,
     // The plan being bought, which is not yet the plan in force (§7).
-    plan: subscription.checkoutPlan ?? subscription.plan,
+    plan: buyingPlan,
     gatewayOrderId: orderId ?? null,
     gatewayPaymentId: paymentId,
-    amount: subscription.price,
+    amount: planPrice,
     currency: subscription.currency,
     status: 'PENDING',
   });
@@ -437,8 +449,46 @@ async function allTransactions({ limit = 50, offset = 0, status, shopId } = {}) 
   };
 }
 
+/**
+ * The shop behind a gateway order, invoice or payment id.
+ *
+ * Exists because a subscription payment does not name its subscription.
+ * Observed on a real test-mode UPI charge: the payment entity Razorpay sent
+ * carried `order_id` and `invoice_id` and **no `subscription_id`**, so the
+ * webhook's only route to a shop was the `notes` fallback - and the notes on
+ * that payment were `{"plan":"BUSINESS"}`, with no shop id either. Both
+ * `payment.authorized` and `payment.captured` were therefore stored unhandled
+ * with "no shop for payment", leaving the transaction row the checkout had
+ * already written stuck at PENDING for a payment that was captured.
+ *
+ * `verifyCheckout` writes that row with the order id before any webhook
+ * arrives, so it is the link the payment events need.
+ */
+async function shopForGatewayReference({ orderId, invoiceId, paymentId }) {
+  const refs = [orderId, invoiceId, paymentId].filter(Boolean);
+  if (!refs.length) return null;
+
+  // Placeholders written out rather than `IN (?)` with an array: that
+  // expansion only happens on mysql2's text protocol, and `queryOne` uses
+  // prepared statements, where the array is bound as a single value and
+  // matches nothing. The first version of this failed silently for exactly
+  // that reason.
+  const list = refs.map(() => '?').join(',');
+  const row = await queryOne(
+    `SELECT shop_id FROM payment_transactions
+      WHERE gateway = ?
+        AND (gateway_order_id IN (${list})
+          OR gateway_invoice_id IN (${list})
+          OR gateway_payment_id IN (${list}))
+      ORDER BY id DESC LIMIT 1`,
+    [GATEWAY, ...refs, ...refs, ...refs],
+  );
+  return row ? Number(row.shop_id) : null;
+}
+
 module.exports = {
   GATEWAY,
+  shopForGatewayReference,
   PAYMENT_STATUS,
   mapTransaction,
   recordTransaction,

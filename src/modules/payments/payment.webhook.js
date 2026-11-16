@@ -182,10 +182,33 @@ async function handlePaymentEvent(eventType, payload) {
   const entity = payload?.payment?.entity;
   if (!entity) return { handled: false, reason: 'no payment entity' };
 
-  // A subscription payment names its subscription; a one-off names its order.
-  const subscription =
+  /*
+   * Three routes to a shop, because the first two both miss for a real
+   * subscription charge.
+   *
+   * Razorpay's payment entity for one carries `order_id` and `invoice_id` and
+   * **no `subscription_id`** - verified against an actual test-mode UPI charge
+   * - and its notes were `{"plan":"BUSINESS"}` with no shop id. So both of the
+   * original routes failed, `payment.authorized` and `payment.captured` were
+   * stored unhandled, and the PENDING row the checkout had already written was
+   * never settled for a payment that Razorpay had captured.
+   *
+   * The third route is that row: `verifyCheckout` writes it with the order id
+   * before any webhook lands, so the order and invoice ids are the link back.
+   */
+  let subscription =
     (await shopForSubscription(entity.subscription_id)) ??
     (shopIdFromNotes(entity) ? await subscriptions.getForShop(shopIdFromNotes(entity)) : null);
+
+  if (!subscription) {
+    const shopId = await payments.shopForGatewayReference({
+      orderId: entity.order_id,
+      invoiceId: entity.invoice_id,
+      paymentId: entity.id,
+    });
+    if (shopId) subscription = await subscriptions.getForShop(shopId);
+  }
+
   if (!subscription) return { handled: false, reason: `no shop for payment ${entity.id}` };
 
   const { method, detail } = describeMethod(entity);
