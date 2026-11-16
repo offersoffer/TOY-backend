@@ -122,7 +122,10 @@ async function main() {
   for (const key of missing) {
     const plan = await createPlan(key);
     created.push([key, plan.id]);
-    console.log('  %-8s -> %s', key, plan.id);
+    // `padEnd`, not '%-8s': Node's console.log supports %s and %d but not
+    // printf width or alignment flags, so '%-8s' printed literally and the
+    // plan key landed in the argument list instead of the column.
+    console.log(`  ${key.padEnd(8)} -> ${plan.id}`);
   }
 
   console.log('\nAdd these to .env:\n');
