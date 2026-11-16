@@ -91,9 +91,28 @@ async function shopForSubscription(gatewaySubscriptionId) {
  * Falls back to the `notes.shop_id` we set when the object was created, for
  * events that arrive before `gateway_subscription_id` was stored.
  */
+/**
+ * The shop id out of a gateway object's `notes`, in either casing.
+ *
+ * This is the fallback when `shopForSubscription` cannot find the subscription
+ * - which is the race worth surviving: a webhook that arrives before the
+ * checkout row is committed, or an event for an object this database has never
+ * seen. If that fallback silently fails, the plan never activates and the
+ * merchant has paid for nothing, which is the one failure in this file worth
+ * being paranoid about.
+ *
+ * Both casings are accepted because the codebase emits both. The Razorpay
+ * *subscription* and *customer* are created with `shop_id` (payment.service.js
+ * lines 249 and 301), matching what this reads. But the checkout options
+ * handed to the browser carry `shopId` (line 338), and Checkout.js attaches
+ * those notes to the payment it creates - so a payment arriving without a
+ * `subscription_id` would carry the casing this function used not to read.
+ * Tolerating both costs a line; discovering which one a real payment used
+ * would cost a merchant's money.
+ */
 function shopIdFromNotes(entity) {
-  const raw = entity?.notes?.shop_id;
-  const parsed = Number(raw);
+  const notes = entity?.notes ?? {};
+  const parsed = Number(notes.shop_id ?? notes.shopId);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
